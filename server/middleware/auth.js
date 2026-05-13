@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { getDb } from '../db/database.js';
+import { sql } from '../db/database.js';
 
 // ── JWT Secret ──────────────────────────────────────────────
 // NEVER fall back to a hardcoded string in production.
@@ -26,24 +26,31 @@ const REFRESH_TOKEN_EXPIRY = '7d';    // Longer-lived refresh token
 // ── Authenticate middleware ─────────────────────────────────
 // Verifies JWT AND checks that the user is still active in the database.
 // This closes the gap where a deactivated user's token still works.
-export function authenticate(req, res, next) {
+export async function authenticate(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'No token provided' });
   }
 
+  let decoded;
   try {
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    // Reject refresh tokens used as access tokens
-    if (decoded.type === 'refresh') {
-      return res.status(401).json({ error: 'Invalid token type' });
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
     }
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
 
+  // Reject refresh tokens used as access tokens
+  if (decoded.type === 'refresh') {
+    return res.status(401).json({ error: 'Invalid token type' });
+  }
+
+  try {
     // Real-time session invalidation: verify user is still active
-    const db = getDb();
-    const user = db.prepare('SELECT active FROM users WHERE id = ?').get(decoded.id);
+    const [user] = await sql`SELECT active FROM users WHERE id = ${decoded.id}`;
     if (!user || !user.active) {
       return res.status(401).json({ error: 'Account deactivated' });
     }
@@ -51,10 +58,7 @@ export function authenticate(req, res, next) {
     req.user = decoded; // { id, username, role, market_id, vendor_id }
     next();
   } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
-    }
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    next(err);
   }
 }
 

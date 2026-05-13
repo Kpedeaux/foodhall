@@ -5,11 +5,12 @@
 //   1. Phase 1 — fetch from Square and compute everything in memory.
 //      No DB writes occur here, so a Square/network failure can never
 //      leave the week's existing data deleted.
-//   2. Phase 2 — inside a single SQLite transaction, delete old rows
-//      for this week and insert the freshly computed rows. If any write
-//      throws, the transaction rolls back and the prior data is preserved.
+//   2. Phase 2 — inside a single Postgres transaction (sql.begin()),
+//      delete old rows for this week and insert the freshly computed rows.
+//      If any write throws, the transaction rolls back and the prior data
+//      is preserved.
 
-import { getDb, auditLog } from '../db/database.js';
+import { sql, auditLog } from '../db/database.js';
 import {
   fetchAllPayments, fetchAllOrders, getWeekDates, getDayName,
   getLocalDate, toDollarsRaw, isDeliveryOrder, getCentralOffset
@@ -22,7 +23,6 @@ const round2 = (v) => Math.round(v * 100) / 100;
  * Returns the weekly_period id.
  */
 export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenWeek, userId, closureDays = []) {
-  const db = getDb();
   const weekDates = getWeekDates(weekStartStr);
   const weekEnd = weekDates[6];
 
@@ -32,13 +32,13 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
 
   // Get vendors active during this week: not excluded, has Square mapping,
   // and either never departed or departed after the week started.
-  const vendors = db.prepare(`
+  const vendors = await sql`
     SELECT * FROM vendors
-    WHERE market_id = ?
-      AND is_excluded = 0
+    WHERE market_id = ${marketId}
+      AND is_excluded = FALSE
       AND square_location_id IS NOT NULL
-      AND (departed_date IS NULL OR departed_date >= ?)
-  `).all(marketId, weekStartStr);
+      AND (departed_date IS NULL OR departed_date >= ${weekStartStr})
+  `;
 
   if (vendors.length === 0) {
     throw new Error('No active vendors with Square location mappings found');
@@ -46,9 +46,9 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
 
   // Look up the existing weekly period (read only). If it's approved,
   // reject BEFORE we fetch anything.
-  const existingWeekPeriod = db.prepare(`
-    SELECT * FROM weekly_periods WHERE market_id = ? AND week_start = ?
-  `).get(marketId, weekStartStr);
+  const [existingWeekPeriod] = await sql`
+    SELECT * FROM weekly_periods WHERE market_id = ${marketId} AND week_start = ${weekStartStr}
+  `;
 
   if (existingWeekPeriod && existingWeekPeriod.status === 'approved') {
     throw new Error('This week is approved. Unlock it first to recalculate.');
@@ -240,18 +240,18 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
     const netTransferBeforeCarryover = round2(grossTransfer - linenCharge);
 
     // Prior balance carryover (read-only query, safe to do outside the TX)
-    const priorBalance = db.prepare(`
+    const [priorBalance] = await sql`
       SELECT ws.balance_due
       FROM weekly_summaries ws
       JOIN weekly_periods wp ON ws.weekly_period_id = wp.id
-      WHERE ws.vendor_id = ?
-        AND wp.market_id = ?
-        AND wp.week_start < ?
+      WHERE ws.vendor_id = ${vendor.id}
+        AND wp.market_id = ${marketId}
+        AND wp.week_start < ${weekStartStr}
         AND wp.status = 'approved'
         AND ws.balance_due > 0
       ORDER BY wp.week_start DESC
       LIMIT 1
-    `).get(vendor.id, marketId, weekStartStr);
+    `;
 
     const priorBalanceDue = priorBalance ? round2(priorBalance.balance_due) : 0;
     const netTransfer = round2(netTransferBeforeCarryover - priorBalanceDue);
@@ -283,85 +283,87 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
 
   // ==========================================================================
   // PHASE 2 — Commit everything atomically.
-  // If this transaction throws, SQLite rolls back and the prior data remains.
+  // If this transaction throws, Postgres rolls back and the prior data remains.
   // ==========================================================================
-  const insertWeeklyPeriod = db.prepare(`
-    INSERT INTO weekly_periods (market_id, week_start, week_end, is_linen_week, closure_days, calculated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
-  `);
-  const updateWeeklyPeriod = db.prepare(`
-    UPDATE weekly_periods
-       SET is_linen_week = ?, closure_days = ?, calculated_at = datetime('now'), week_end = ?
-     WHERE id = ?
-  `);
-  const deleteDailies = db.prepare('DELETE FROM daily_calculations WHERE weekly_period_id = ?');
-  const deleteAdjustments = db.prepare('DELETE FROM adjustments WHERE weekly_summary_id IN (SELECT id FROM weekly_summaries WHERE weekly_period_id = ?)');
-  const deleteSummaries = db.prepare('DELETE FROM weekly_summaries WHERE weekly_period_id = ?');
+  // Pass closure_days as the actual array; sql.json() at the insert site
+  // tags it as JSONB so the round-trip stays an array on subsequent reads.
 
-  const insertDaily = db.prepare(`
-    INSERT INTO daily_calculations (weekly_period_id, vendor_id, date, dine_in_sales, delivery_sales,
-      total_sales, market_fee_calculated, market_fee_applied, square_fees, cash_collected, tips,
-      daily_transfer, payment_count, is_closure_day)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertSummary = db.prepare(`
-    INSERT INTO weekly_summaries (weekly_period_id, vendor_id, total_sales, total_dine_in, total_delivery,
-      total_market_fee, total_square_fees, total_cash, total_tips, delivery_fee, service_charge,
-      tips_to_transfer, weekly_minimum_bump, linen_charge, gross_transfer, net_transfer,
-      prior_balance_due, balance_due)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertAdj = db.prepare(`
-    INSERT INTO adjustments (weekly_summary_id, type, amount, description, created_by)
-    VALUES (?, 'linen', ?, 'Weekly linen charge', ?)
-  `);
-
-  let weekPeriodId;
-  const commit = db.transaction(() => {
+  const weekPeriodId = await sql.begin(async (sql) => {
+    let wpId;
     if (existingWeekPeriod) {
-      weekPeriodId = existingWeekPeriod.id;
-      deleteDailies.run(weekPeriodId);
-      deleteAdjustments.run(weekPeriodId);
-      deleteSummaries.run(weekPeriodId);
-      updateWeeklyPeriod.run(isLinenWeek ? 1 : 0, JSON.stringify(closureDays), weekEnd, weekPeriodId);
+      wpId = existingWeekPeriod.id;
+      await sql`DELETE FROM daily_calculations WHERE weekly_period_id = ${wpId}`;
+      await sql`
+        DELETE FROM adjustments
+        WHERE weekly_summary_id IN (
+          SELECT id FROM weekly_summaries WHERE weekly_period_id = ${wpId}
+        )
+      `;
+      await sql`DELETE FROM weekly_summaries WHERE weekly_period_id = ${wpId}`;
+      await sql`
+        UPDATE weekly_periods
+           SET is_linen_week = ${isLinenWeek},
+               closure_days = ${sql.json(closureDays)},
+               calculated_at = now(),
+               week_end = ${weekEnd}
+         WHERE id = ${wpId}
+      `;
     } else {
-      const ins = insertWeeklyPeriod.run(marketId, weekStartStr, weekEnd, isLinenWeek ? 1 : 0, JSON.stringify(closureDays));
-      weekPeriodId = ins.lastInsertRowid;
+      const [ins] = await sql`
+        INSERT INTO weekly_periods (market_id, week_start, week_end, is_linen_week, closure_days, calculated_at)
+        VALUES (${marketId}, ${weekStartStr}, ${weekEnd}, ${isLinenWeek}, ${sql.json(closureDays)}, now())
+        RETURNING id
+      `;
+      wpId = ins.id;
     }
 
     for (const p of prepared) {
       for (const date of weekDates) {
         const d = p.dayData[date];
-        insertDaily.run(
-          weekPeriodId, p.vendor.id, date,
-          d.dineInSales, d.deliverySales, d.totalSales,
-          d.marketFeeCalc, d.marketFeeApplied, d.squareFees,
-          d.cashCollected, d.tips, d.dailyTransfer, d.paymentCount,
-          d.isClosure ? 1 : 0
-        );
+        await sql`
+          INSERT INTO daily_calculations
+            (weekly_period_id, vendor_id, date, dine_in_sales, delivery_sales,
+             total_sales, market_fee_calculated, market_fee_applied, square_fees,
+             cash_collected, tips, daily_transfer, payment_count, is_closure_day)
+          VALUES
+            (${wpId}, ${p.vendor.id}, ${date}, ${d.dineInSales}, ${d.deliverySales},
+             ${d.totalSales}, ${d.marketFeeCalc}, ${d.marketFeeApplied}, ${d.squareFees},
+             ${d.cashCollected}, ${d.tips}, ${d.dailyTransfer}, ${d.paymentCount},
+             ${d.isClosure})
+        `;
       }
 
       const w = p.weekly;
-      const summaryResult = insertSummary.run(
-        weekPeriodId, p.vendor.id,
-        w.totalSales, w.totalDineIn, w.totalDelivery,
-        w.totalMarketFee, w.totalSquareFees, w.totalCash,
-        w.totalTips, w.deliveryFee, w.serviceCharge, w.tipsToTransfer,
-        w.weeklyMinimumBump, w.linenCharge, w.grossTransfer, w.netTransfer,
-        w.priorBalanceDue, w.balanceDue
-      );
+      const [summaryRow] = await sql`
+        INSERT INTO weekly_summaries
+          (weekly_period_id, vendor_id, total_sales, total_dine_in, total_delivery,
+           total_market_fee, total_square_fees, total_cash, total_tips,
+           delivery_fee, service_charge, tips_to_transfer,
+           weekly_minimum_bump, linen_charge, gross_transfer, net_transfer,
+           prior_balance_due, balance_due)
+        VALUES
+          (${wpId}, ${p.vendor.id}, ${w.totalSales}, ${w.totalDineIn}, ${w.totalDelivery},
+           ${w.totalMarketFee}, ${w.totalSquareFees}, ${w.totalCash}, ${w.totalTips},
+           ${w.deliveryFee}, ${w.serviceCharge}, ${w.tipsToTransfer},
+           ${w.weeklyMinimumBump}, ${w.linenCharge}, ${w.grossTransfer}, ${w.netTransfer},
+           ${w.priorBalanceDue}, ${w.balanceDue})
+        RETURNING id
+      `;
 
       // Auto-create linen adjustment on linen weeks.
       // Signed-adjustment convention: deduction = negative amount.
       if (isLinenWeek && w.linenCharge > 0) {
-        insertAdj.run(summaryResult.lastInsertRowid, -w.linenCharge, userId);
+        await sql`
+          INSERT INTO adjustments (weekly_summary_id, type, amount, description, created_by)
+          VALUES (${summaryRow.id}, 'linen', ${-w.linenCharge}, 'Weekly linen charge', ${userId})
+        `;
       }
     }
+
+    return wpId;
   });
 
-  commit();
-
-  auditLog(marketId, userId, 'calculate_week', 'weekly_period', weekPeriodId, {
+  await auditLog(marketId, userId, 'calculate_week', 'weekly_period', weekPeriodId, {
     week_start: weekStartStr, is_linen_week: isLinenWeek, closure_days: closureDays, vendor_count: vendors.length
   });
 

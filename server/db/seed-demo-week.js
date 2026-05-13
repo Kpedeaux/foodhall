@@ -1,3 +1,4 @@
+// LEGACY (SQLite-era): not converted to Postgres yet. Do not run against the new Postgres DB.
 /**
  * Add additional demo weeks to the Demo Food Hall.
  *

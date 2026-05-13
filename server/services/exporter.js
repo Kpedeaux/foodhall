@@ -1,6 +1,6 @@
 // Excel Export Service — generates .xlsx files for CPA reporting
 import ExcelJS from 'exceljs';
-import { getDb } from '../db/database.js';
+import { sql } from '../db/database.js';
 
 const CURRENCY_FORMAT = '$#,##0.00';
 
@@ -27,18 +27,22 @@ function applyCurrencyFormat(sheet, startCol, endCol) {
  * Export a single vendor's annual data as an Excel workbook.
  */
 export async function exportVendorAnnual(vendorId, year) {
-  const db = getDb();
-
-  const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(vendorId);
+  const [vendor] = await sql`SELECT * FROM vendors WHERE id = ${vendorId}`;
   if (!vendor) throw new Error('Vendor not found');
 
-  const summaries = db.prepare(`
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year + 1}-01-01`;
+
+  const summaries = await sql`
     SELECT ws.*, wp.week_start, wp.week_end, wp.is_linen_week
     FROM weekly_summaries ws
     JOIN weekly_periods wp ON ws.weekly_period_id = wp.id
-    WHERE ws.vendor_id = ? AND wp.status = 'approved' AND wp.week_start >= ? AND wp.week_start < ?
+    WHERE ws.vendor_id = ${vendorId}
+      AND wp.status = 'approved'
+      AND wp.week_start >= ${yearStart}
+      AND wp.week_start < ${yearEnd}
     ORDER BY wp.week_start
-  `).all(vendorId, `${year}-01-01`, `${year + 1}-01-01`);
+  `;
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Food Hall Manager';
@@ -64,7 +68,11 @@ export async function exportVendorAnnual(vendorId, year) {
   applyHeaderStyle(salesSheet.getRow(1));
 
   for (const s of summaries) {
-    const adjTotal = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM adjustments WHERE weekly_summary_id = ?').get(s.id);
+    const [adjTotal] = await sql`
+      SELECT COALESCE(SUM(amount), 0) AS total
+      FROM adjustments
+      WHERE weekly_summary_id = ${s.id}
+    `;
 
     salesSheet.addRow({
       week_start: s.week_start,
@@ -147,31 +155,36 @@ export async function exportVendorAnnual(vendorId, year) {
  * Export all vendors' annual data. One sheet per vendor for both sales and tips.
  */
 export async function exportAllVendors(marketId, year) {
-  const db = getDb();
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year + 1}-01-01`;
 
-  const vendors = db.prepare(`
+  const vendors = await sql`
     SELECT DISTINCT v.id, v.name
     FROM vendors v
     JOIN weekly_summaries ws ON ws.vendor_id = v.id
     JOIN weekly_periods wp ON ws.weekly_period_id = wp.id
-    WHERE v.market_id = ? AND wp.status = 'approved'
-      AND wp.week_start >= ? AND wp.week_start < ?
+    WHERE v.market_id = ${marketId}
+      AND wp.status = 'approved'
+      AND wp.week_start >= ${yearStart}
+      AND wp.week_start < ${yearEnd}
     ORDER BY v.name
-  `).all(marketId, `${year}-01-01`, `${year + 1}-01-01`);
+  `;
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Food Hall Manager';
   workbook.created = new Date();
 
   for (const vendor of vendors) {
-    const summaries = db.prepare(`
+    const summaries = await sql`
       SELECT ws.*, wp.week_start, wp.week_end
       FROM weekly_summaries ws
       JOIN weekly_periods wp ON ws.weekly_period_id = wp.id
-      WHERE ws.vendor_id = ? AND wp.status = 'approved'
-        AND wp.week_start >= ? AND wp.week_start < ?
+      WHERE ws.vendor_id = ${vendor.id}
+        AND wp.status = 'approved'
+        AND wp.week_start >= ${yearStart}
+        AND wp.week_start < ${yearEnd}
       ORDER BY wp.week_start
-    `).all(vendor.id, `${year}-01-01`, `${year + 1}-01-01`);
+    `;
 
     const sheetName = vendor.name.substring(0, 28);
 

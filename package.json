@@ -9,11 +9,11 @@
     "dev": "concurrently \"node server/index.js\" \"vite\"",
     "server": "node server/index.js",
     "build": "vite build",
-    "start": "NODE_ENV=production node server/index.js"
+    "start": "NODE_ENV=production node server/index.js",
+    "migrate-from-sqlite": "node scripts/import-sqlite-to-postgres.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.7.0",
     "concurrently": "^9.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
@@ -21,10 +21,12 @@
     "express": "^4.21.0",
     "express-rate-limit": "^8.3.2",
     "helmet": "^8.1.0",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "postgres": "^3.4.9"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "better-sqlite3": "^11.7.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",

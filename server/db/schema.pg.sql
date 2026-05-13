@@ -1,0 +1,173 @@
+-- Food Hall Manager — Postgres schema
+-- Idempotent: CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS,
+-- so this can safely run on every boot to set up a fresh database or
+-- no-op against an existing one.
+
+-- ── markets (tenant root) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS markets (
+  id                          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name                        TEXT NOT NULL,
+  square_environment          TEXT NOT NULL DEFAULT 'production',
+  default_delivery_fee_rate   DOUBLE PRECISION NOT NULL DEFAULT 0.105,
+  default_service_charge_rate DOUBLE PRECISION NOT NULL DEFAULT 0.02,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── vendors ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vendors (
+  id                  INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  market_id           INTEGER NOT NULL REFERENCES markets(id),
+  name                TEXT NOT NULL,
+  square_location_id  TEXT,
+  plan_type           TEXT NOT NULL DEFAULT 'STANDARD'
+                        CHECK (plan_type IN ('FLAT', 'STANDARD', 'WEEKLY')),
+  percentage_rate     DOUBLE PRECISION NOT NULL DEFAULT 0.30,
+  daily_base_rent     DOUBLE PRECISION NOT NULL DEFAULT 0.00,
+  delivery_fee_rate   DOUBLE PRECISION NOT NULL DEFAULT 0.105,
+  service_charge_rate DOUBLE PRECISION NOT NULL DEFAULT 0.02,
+  weekly_minimum      DOUBLE PRECISION NOT NULL DEFAULT 0.00,
+  linen_charge        DOUBLE PRECISION NOT NULL DEFAULT 0.00,
+  active              BOOLEAN NOT NULL DEFAULT TRUE,
+  departed_date       DATE,
+  is_excluded         BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(market_id, square_location_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_market ON vendors(market_id);
+CREATE INDEX IF NOT EXISTS idx_vendors_active ON vendors(market_id, active);
+
+-- ── users (security: lockout + must-change-password baked in) ─
+CREATE TABLE IF NOT EXISTS users (
+  id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  market_id             INTEGER NOT NULL REFERENCES markets(id),
+  vendor_id             INTEGER REFERENCES vendors(id),
+  username              TEXT NOT NULL UNIQUE,
+  password_hash         TEXT NOT NULL,
+  role                  TEXT NOT NULL DEFAULT 'vendor'
+                          CHECK (role IN ('admin', 'vendor')),
+  email                 TEXT,
+  active                BOOLEAN NOT NULL DEFAULT TRUE,
+  must_change_password  BOOLEAN NOT NULL DEFAULT FALSE,
+  failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until          TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_market ON users(market_id);
+
+-- ── weekly_periods ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS weekly_periods (
+  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  market_id     INTEGER NOT NULL REFERENCES markets(id),
+  week_start    DATE NOT NULL,
+  week_end      DATE NOT NULL,
+  is_linen_week BOOLEAN NOT NULL DEFAULT FALSE,
+  closure_days  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status        TEXT NOT NULL DEFAULT 'draft'
+                  CHECK (status IN ('draft', 'approved')),
+  calculated_at TIMESTAMPTZ,
+  approved_by   INTEGER REFERENCES users(id),
+  approved_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(market_id, week_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_periods_market ON weekly_periods(market_id);
+CREATE INDEX IF NOT EXISTS idx_weekly_periods_status ON weekly_periods(market_id, status);
+
+-- ── daily_calculations ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS daily_calculations (
+  id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  weekly_period_id      INTEGER NOT NULL REFERENCES weekly_periods(id) ON DELETE CASCADE,
+  vendor_id             INTEGER NOT NULL REFERENCES vendors(id),
+  date                  DATE NOT NULL,
+  dine_in_sales         DOUBLE PRECISION NOT NULL DEFAULT 0,
+  delivery_sales        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_sales           DOUBLE PRECISION NOT NULL DEFAULT 0,
+  market_fee_calculated DOUBLE PRECISION NOT NULL DEFAULT 0,
+  market_fee_applied    DOUBLE PRECISION NOT NULL DEFAULT 0,
+  square_fees           DOUBLE PRECISION NOT NULL DEFAULT 0,
+  cash_collected        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  tips                  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  daily_transfer        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  payment_count         INTEGER NOT NULL DEFAULT 0,
+  is_closure_day        BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_calc_period_vendor
+  ON daily_calculations(weekly_period_id, vendor_id);
+
+-- ── weekly_summaries ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS weekly_summaries (
+  id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  weekly_period_id     INTEGER NOT NULL REFERENCES weekly_periods(id) ON DELETE CASCADE,
+  vendor_id            INTEGER NOT NULL REFERENCES vendors(id),
+  total_sales          DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_dine_in        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_delivery       DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_market_fee     DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_square_fees    DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_cash           DOUBLE PRECISION NOT NULL DEFAULT 0,
+  total_tips           DOUBLE PRECISION NOT NULL DEFAULT 0,
+  delivery_fee         DOUBLE PRECISION NOT NULL DEFAULT 0,
+  service_charge       DOUBLE PRECISION NOT NULL DEFAULT 0,
+  tips_to_transfer     DOUBLE PRECISION NOT NULL DEFAULT 0,
+  weekly_minimum_bump  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  linen_charge         DOUBLE PRECISION NOT NULL DEFAULT 0,
+  gross_transfer       DOUBLE PRECISION NOT NULL DEFAULT 0,
+  net_transfer         DOUBLE PRECISION NOT NULL DEFAULT 0,
+  prior_balance_due    DOUBLE PRECISION NOT NULL DEFAULT 0,
+  balance_due          DOUBLE PRECISION NOT NULL DEFAULT 0,
+  UNIQUE(weekly_period_id, vendor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_summaries_period ON weekly_summaries(weekly_period_id);
+
+-- ── adjustments (signed-amount convention, post-2026-04 migration) ──
+-- amount > 0 = credit to vendor; amount < 0 = fine/deduction.
+CREATE TABLE IF NOT EXISTS adjustments (
+  id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  weekly_summary_id INTEGER NOT NULL REFERENCES weekly_summaries(id) ON DELETE CASCADE,
+  type              TEXT NOT NULL
+                      CHECK (type IN ('linen', 'fine', 'equipment',
+                                      'credit', 'deposit', 'other')),
+  amount            DOUBLE PRECISION NOT NULL,
+  description       TEXT,
+  created_by        INTEGER REFERENCES users(id),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_adjustments_summary ON adjustments(weekly_summary_id);
+
+-- ── audit_log ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS audit_log (
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  market_id   INTEGER REFERENCES markets(id),
+  user_id     INTEGER REFERENCES users(id),
+  action      TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id   INTEGER,
+  details     JSONB,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_market ON audit_log(market_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+
+-- ── schema_migrations ────────────────────────────────────────
+-- Tracks one-time data migrations (not schema migrations — those are
+-- handled by this file being idempotent).
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name       TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Pre-seed the migrations that ran against the original SQLite DB
+-- so the import script (which copies post-migration data) doesn't
+-- re-apply them. Safe to run repeatedly.
+INSERT INTO schema_migrations (name) VALUES
+  ('2026_04_flip_adjustment_sign_convention')
+ON CONFLICT (name) DO NOTHING;

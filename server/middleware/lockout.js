@@ -1,18 +1,19 @@
-import { getDb } from '../db/database.js';
+import { sql } from '../db/database.js';
 
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+const LOCKOUT_DURATION_MINUTES = 30;
 
 // ── Account lockout ─────────────────────────────────────────
 // Tracks failed login attempts in the database. After MAX_FAILED_ATTEMPTS
-// consecutive failures, the account is locked for LOCKOUT_DURATION_MS.
+// consecutive failures, the account is locked for LOCKOUT_DURATION_MINUTES.
 // Successful login resets the counter.
 
-export function checkLockout(username) {
-  const db = getDb();
-  const user = db.prepare(`
-    SELECT id, failed_login_attempts, locked_until FROM users WHERE LOWER(username) = LOWER(?) AND active = 1
-  `).get(username);
+export async function checkLockout(username) {
+  const [user] = await sql`
+    SELECT id, failed_login_attempts, locked_until
+    FROM users
+    WHERE LOWER(username) = LOWER(${username}) AND active = TRUE
+  `;
 
   if (!user) return { locked: false }; // Don't reveal user existence
 
@@ -23,30 +24,42 @@ export function checkLockout(username) {
       return { locked: true, minutesLeft };
     }
     // Lockout expired — reset
-    db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id);
+    await sql`
+      UPDATE users SET failed_login_attempts = 0, locked_until = NULL
+      WHERE id = ${user.id}
+    `;
   }
 
   return { locked: false };
 }
 
-export function recordFailedAttempt(username) {
-  const db = getDb();
-  const user = db.prepare('SELECT id, failed_login_attempts FROM users WHERE LOWER(username) = LOWER(?)').get(username);
+export async function recordFailedAttempt(username) {
+  const [user] = await sql`
+    SELECT id, failed_login_attempts
+    FROM users
+    WHERE LOWER(username) = LOWER(${username})
+  `;
   if (!user) return;
 
   const attempts = (user.failed_login_attempts || 0) + 1;
 
   if (attempts >= MAX_FAILED_ATTEMPTS) {
-    const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
-    db.prepare('UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?')
-      .run(attempts, lockedUntil, user.id);
+    await sql`
+      UPDATE users
+      SET failed_login_attempts = ${attempts},
+          locked_until = now() + (${LOCKOUT_DURATION_MINUTES} || ' minutes')::interval
+      WHERE id = ${user.id}
+    `;
   } else {
-    db.prepare('UPDATE users SET failed_login_attempts = ? WHERE id = ?')
-      .run(attempts, user.id);
+    await sql`
+      UPDATE users SET failed_login_attempts = ${attempts} WHERE id = ${user.id}
+    `;
   }
 }
 
-export function resetFailedAttempts(userId) {
-  const db = getDb();
-  db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(userId);
+export async function resetFailedAttempts(userId) {
+  await sql`
+    UPDATE users SET failed_login_attempts = 0, locked_until = NULL
+    WHERE id = ${userId}
+  `;
 }

@@ -1,3 +1,4 @@
+// LEGACY (SQLite-era): not converted to Postgres yet. Do not run against the new Postgres DB.
 /**
  * One-shot: rotate the demo-admin / demo-vendor account passwords to fresh
  * random values. The new passwords are printed to stdout ONCE. Copy them

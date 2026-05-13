@@ -1,4 +1,16 @@
-import Database from 'better-sqlite3';
+// Food Hall Manager — Postgres data layer
+//
+// Uses postgres.js (https://github.com/porsager/postgres) which exposes a
+// tagged-template client:
+//
+//   const rows = await sql`SELECT * FROM vendors WHERE market_id = ${marketId}`;
+//   const [user] = await sql`SELECT * FROM users WHERE id = ${userId}`;
+//   const [inserted] = await sql`INSERT INTO vendors ${sql(payload)} RETURNING id`;
+//
+// All values interpolated via ${...} are safely parameterized — never
+// string-concatenate into a sql`` tag.
+
+import postgres from 'postgres';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -7,187 +19,122 @@ import bcrypt from 'bcryptjs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let db = null;
-
-export function getDb() {
-  if (db) return db;
-
-  const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'food-hall.db');
-  const dbDir = path.dirname(dbPath);
-
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-  }
-
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-
-  return db;
+if (!process.env.DATABASE_URL) {
+  console.error('FATAL: DATABASE_URL is not set.');
+  console.error('Local dev: docker run --name fh-pg -e POSTGRES_PASSWORD=dev -p 5432:5432 -d postgres:16');
+  console.error('           DATABASE_URL=postgres://postgres:dev@localhost:5432/postgres');
+  console.error('Production (DO App Platform): inject ${db.DATABASE_URL} from your Managed Postgres binding.');
+  process.exit(1);
 }
 
-export function initDb() {
-  const db = getDb();
+// ── Connection ──────────────────────────────────────────────
+// DO Managed Postgres requires TLS. We accept the platform-provided
+// certificate without pinning a CA here because App Platform injects
+// the connection string with `?sslmode=require` and trusts the cert
+// chain through the runtime image's CA bundle.
+const sslMode =
+  process.env.DATABASE_SSL === 'disable' ? false :
+  process.env.NODE_ENV === 'production' ? 'require' :
+  'prefer';
 
-  // Run schema
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
-  db.exec(schema);
+const sql = postgres(process.env.DATABASE_URL, {
+  ssl: sslMode,
+  max: Number(process.env.PG_POOL_MAX || 10),
+  idle_timeout: 30,
+  connect_timeout: 10,
+  // Return numeric/decimal columns as JS numbers (matching prior REAL behavior).
+  // If we move to NUMERIC for money later, we'll revisit this.
+  types: {
+    // NUMERIC → JS number (matching prior REAL behavior).
+    numeric: { from: [1700], parse: (v) => Number(v) },
+    // DATE → ISO 'YYYY-MM-DD' string (matching prior SQLite TEXT behavior).
+    // We deliberately do NOT override TIMESTAMPTZ (oid 1184), which stays as Date.
+    date: { from: [1082], parse: (v) => v },
+  },
+});
 
-  // Migrations for existing databases
-  const migrations = [
-    { table: 'weekly_periods', column: 'closure_days', sql: "ALTER TABLE weekly_periods ADD COLUMN closure_days TEXT NOT NULL DEFAULT '[]'" },
-    { table: 'daily_calculations', column: 'is_closure_day', sql: "ALTER TABLE daily_calculations ADD COLUMN is_closure_day INTEGER NOT NULL DEFAULT 0" },
-    { table: 'vendors', column: 'departed_date', sql: "ALTER TABLE vendors ADD COLUMN departed_date TEXT" },
-    // Security: account lockout columns
-    { table: 'users', column: 'failed_login_attempts', sql: "ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0" },
-    { table: 'users', column: 'locked_until', sql: "ALTER TABLE users ADD COLUMN locked_until TEXT" },
-    // Balance carryover: track what a vendor owes from previous weeks
-    { table: 'weekly_summaries', column: 'prior_balance_due', sql: "ALTER TABLE weekly_summaries ADD COLUMN prior_balance_due REAL NOT NULL DEFAULT 0" },
-    { table: 'weekly_summaries', column: 'balance_due', sql: "ALTER TABLE weekly_summaries ADD COLUMN balance_due REAL NOT NULL DEFAULT 0" },
-  ];
-  for (const m of migrations) {
-    const cols = db.prepare(`PRAGMA table_info(${m.table})`).all();
-    if (!cols.some(c => c.name === m.column)) {
-      db.exec(m.sql);
-      console.log(`  Migrated: added ${m.column} to ${m.table}`);
-    }
-  }
+export { sql };
 
-  // Canonical list of allowed adjustment types. Keep in sync with schema.sql
-  // CHECK constraint and with the ADJ_TYPES dropdown on the client.
-  const ALLOWED_ADJUSTMENT_TYPES = ['linen', 'fine', 'equipment', 'credit', 'deposit', 'other'];
-
-  // Rebuild the `adjustments` table whenever its CHECK constraint is missing
-  // any of the currently-allowed types. This runs idempotently on every boot
-  // so new types added to ALLOWED_ADJUSTMENT_TYPES above flow through to
-  // production DBs on the next server start — no hand-written migrations needed.
-  try {
-    const checkSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='adjustments'").get();
-    if (checkSql && checkSql.sql) {
-      const missing = ALLOWED_ADJUSTMENT_TYPES.filter(t => !checkSql.sql.includes(`'${t}'`));
-      if (missing.length > 0) {
-        console.log(`  Migrating adjustments CHECK constraint to include: ${missing.join(', ')}...`);
-        const typeList = ALLOWED_ADJUSTMENT_TYPES.map(t => `'${t}'`).join(', ');
-        db.exec(`
-          CREATE TABLE IF NOT EXISTS adjustments_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            weekly_summary_id INTEGER NOT NULL REFERENCES weekly_summaries(id) ON DELETE CASCADE,
-            type TEXT NOT NULL CHECK (type IN (${typeList})),
-            amount REAL NOT NULL,
-            description TEXT,
-            created_by INTEGER REFERENCES users(id),
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-          );
-          INSERT INTO adjustments_new SELECT * FROM adjustments;
-          DROP TABLE adjustments;
-          ALTER TABLE adjustments_new RENAME TO adjustments;
-          CREATE INDEX IF NOT EXISTS idx_adjustments_summary ON adjustments(weekly_summary_id);
-        `);
-        console.log('  ✅ Adjustments table migrated');
-      }
-    }
-  } catch (err) {
-    console.error('  Warning: adjustments migration failed:', err.message);
-  }
-
-  // Versioned migrations tracked in schema_migrations table.
-  // Use this for any one-time data (not schema) migrations going forward.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      name TEXT PRIMARY KEY,
-      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-
-  // 2026-04 migration: flip the sign convention for adjustments.
-  //
-  // OLD convention: amount was stored as a POSITIVE value meaning "deduction"
-  //   and recalcNetTransfer computed:  net = gross - SUM(amount) - prior.
-  //
-  // NEW convention (accounting standard): amount is SIGNED.
-  //   positive = credit to vendor, negative = fine/deduction, and
-  //   recalcNetTransfer now computes:  net = gross + SUM(amount) - prior.
-  //
-  // We negate every existing adjustment row so previously-stored
-  // net_transfer / balance_due values remain numerically correct under
-  // the new formula (gross + SUM(-old) - prior == gross - SUM(old) - prior).
-  try {
-    const migName = '2026_04_flip_adjustment_sign_convention';
-    const already = db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?').get(migName);
-    if (!already) {
-      const result = db.prepare('UPDATE adjustments SET amount = -amount').run();
-      db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(migName);
-      if (result.changes > 0) {
-        console.log(`  ✅ Flipped sign on ${result.changes} existing adjustment row(s) to new signed convention`);
-      }
-    }
-  } catch (err) {
-    console.error('  Warning: adjustment sign migration failed:', err.message);
-  }
-
-  // Seed if empty
-  const marketCount = db.prepare('SELECT COUNT(*) as count FROM markets').get();
-  if (marketCount.count === 0) {
-    console.log('📦 Seeding database...');
-
-    // SECURITY: previous versions seeded an admin user with the hardcoded
-    // password "changeme". That value is treated as compromised and is no
-    // longer accepted. To bootstrap a fresh install, set environment vars:
-    //   INITIAL_ADMIN_PASSWORD   (required, 12+ chars)
-    //   INITIAL_ADMIN_USERNAME   (optional, default: "ashley")
-    //   INITIAL_ADMIN_EMAIL      (optional)
-    //   INITIAL_MARKET_NAME      (optional, default: "St. Roch Market")
-    // The seed runs ONCE when the markets table is empty.
-    const initialPassword = process.env.INITIAL_ADMIN_PASSWORD;
-    const initialUsername = process.env.INITIAL_ADMIN_USERNAME || 'ashley';
-    const initialEmail = process.env.INITIAL_ADMIN_EMAIL || null;
-    const initialMarketName =
-      process.env.INITIAL_MARKET_NAME || 'St. Roch Market';
-    if (!initialPassword || initialPassword.length < 12) {
-      console.error('');
-      console.error(
-        'Refusing to seed: INITIAL_ADMIN_PASSWORD env var is not set, or is shorter than 12 chars.',
-      );
-      console.error(
-        'Set INITIAL_ADMIN_PASSWORD to a strong password (12+ chars) and restart.',
-      );
-      console.error('');
-      process.exit(1);
-    }
-    if (initialPassword === 'changeme' || initialPassword === 'strochadmin') {
-      console.error('INITIAL_ADMIN_PASSWORD must not be a known default value.');
-      process.exit(1);
-    }
-
-    // Create the market
-    const insertMarket = db.prepare(`
-      INSERT INTO markets (name, square_environment, default_delivery_fee_rate, default_service_charge_rate)
-      VALUES (?, ?, ?, ?)
-    `);
-    const marketResult = insertMarket.run(initialMarketName, 'production', 0.105, 0.02);
-    const marketId = marketResult.lastInsertRowid;
-
-    // Create the initial admin
-    const hash = bcrypt.hashSync(initialPassword, 12);
-    const insertUser = db.prepare(`
-      INSERT INTO users (market_id, username, password_hash, role, email, must_change_password)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    insertUser.run(marketId, initialUsername, hash, 'admin', initialEmail, 1);
-
-    console.log(
-      `✅ Database seeded: ${initialMarketName} + admin user "${initialUsername}" (must change password on first login)`,
-    );
-  }
-
-  return db;
-}
-
-// Helper: log an action to the audit log
-export function auditLog(marketId, userId, action, entityType, entityId, details) {
-  const db = getDb();
-  db.prepare(`
+// ── auditLog helper ─────────────────────────────────────────
+// NOTE: now async. Every caller that does `auditLog(...)` must `await`.
+// `details` may be null, a string, or any JSON-serializable value.
+export async function auditLog(marketId, userId, action, entityType, entityId, details) {
+  // Use sql.json() so postgres.js tags the value as JSONB (oid 3802) for
+  // proper round-trip parsing on read. If `details` is a string assumed to
+  // already be JSON, parse it first.
+  const detailsValue = details == null
+    ? null
+    : (typeof details === 'string' ? JSON.parse(details) : details);
+  await sql`
     INSERT INTO audit_log (market_id, user_id, action, entity_type, entity_id, details)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(marketId, userId, action, entityType, entityId, typeof details === 'string' ? details : JSON.stringify(details));
+    VALUES (${marketId}, ${userId}, ${action}, ${entityType}, ${entityId},
+            ${detailsValue == null ? null : sql.json(detailsValue)})
+  `;
 }
+
+// ── Schema initialization + first-boot seed ─────────────────
+// Idempotent. Run once on server startup. Safe to call repeatedly.
+export async function initDb() {
+  // 1. Apply the schema. CREATE TABLE IF NOT EXISTS makes this a no-op on
+  // subsequent boots and a clean install on a fresh Managed Postgres cluster.
+  const schemaPath = path.join(__dirname, 'schema.pg.sql');
+  const schema = fs.readFileSync(schemaPath, 'utf8');
+  await sql.unsafe(schema);
+
+  // 2. First-boot seed: only runs if markets table is empty.
+  const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM markets`;
+  if (count > 0) return;
+
+  console.log('📦 Seeding empty database with initial market + admin user...');
+
+  // SECURITY: refuse to seed without an explicit strong INITIAL_ADMIN_PASSWORD.
+  // No hardcoded defaults — "changeme" and "strochadmin" are treated as known-compromised.
+  const initialPassword = process.env.INITIAL_ADMIN_PASSWORD;
+  const initialUsername = process.env.INITIAL_ADMIN_USERNAME || 'ashley';
+  const initialEmail    = process.env.INITIAL_ADMIN_EMAIL || null;
+  const initialMarket   = process.env.INITIAL_MARKET_NAME || 'St. Roch Market';
+
+  if (!initialPassword || initialPassword.length < 12) {
+    console.error('');
+    console.error('Refusing to seed: INITIAL_ADMIN_PASSWORD env var is missing or shorter than 12 chars.');
+    console.error('Set INITIAL_ADMIN_PASSWORD to a strong password (12+ chars) and restart.');
+    console.error('');
+    process.exit(1);
+  }
+  if (initialPassword === 'changeme' || initialPassword === 'strochadmin') {
+    console.error('INITIAL_ADMIN_PASSWORD must not be a known default value.');
+    process.exit(1);
+  }
+
+  // Wrap the seed in a transaction so a partial failure doesn't leave a
+  // market without its bootstrap admin.
+  await sql.begin(async (sql) => {
+    const [market] = await sql`
+      INSERT INTO markets (name, square_environment, default_delivery_fee_rate, default_service_charge_rate)
+      VALUES (${initialMarket}, 'production', 0.105, 0.02)
+      RETURNING id
+    `;
+    const hash = bcrypt.hashSync(initialPassword, 12);
+    await sql`
+      INSERT INTO users (market_id, username, password_hash, role, email, must_change_password)
+      VALUES (${market.id}, ${initialUsername}, ${hash}, 'admin', ${initialEmail}, TRUE)
+    `;
+  });
+
+  console.log(`✅ Seeded: market "${initialMarket}" + admin user "${initialUsername}" (must change password on first login)`);
+}
+
+// ── Graceful shutdown ───────────────────────────────────────
+// App Platform sends SIGTERM on redeploy; flush the pool so in-flight
+// queries finish and connections release cleanly.
+async function shutdown(signal) {
+  console.log(`Received ${signal}, closing Postgres pool...`);
+  try {
+    await sql.end({ timeout: 5 });
+  } catch (e) {
+    console.error('Error closing Postgres pool:', e.message);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
