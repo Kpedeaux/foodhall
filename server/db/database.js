@@ -74,12 +74,33 @@ export async function auditLog(marketId, userId, action, entityType, entityId, d
 
 // ── Schema initialization + first-boot seed ─────────────────
 // Idempotent. Run once on server startup. Safe to call repeatedly.
+//
+// In production, the runtime DB user (e.g. foodhall_app) is intentionally
+// scoped to CRUD-only — it doesn't have CREATE on public schema. So we
+// detect whether the schema has already been applied (sentinel: the
+// `markets` table) and skip the apply step if so. Schema application is
+// a one-time deployment task run with an elevated user (doadmin) via the
+// import script or psql, not by the running app.
 export async function initDb() {
-  // 1. Apply the schema. CREATE TABLE IF NOT EXISTS makes this a no-op on
-  // subsequent boots and a clean install on a fresh Managed Postgres cluster.
-  const schemaPath = path.join(__dirname, 'schema.pg.sql');
-  const schema = fs.readFileSync(schemaPath, 'utf8');
-  await sql.unsafe(schema);
+  const [{ exists: schemaApplied }] = await sql`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'markets'
+    ) AS exists
+  `;
+
+  if (!schemaApplied) {
+    // 1a. Fresh database — apply schema now. This requires CREATE on public
+    // schema; if the current user lacks it, the deploy will fail loudly
+    // with a permission error pointing at this exact step.
+    console.log('Schema not detected; applying from schema.pg.sql...');
+    const schemaPath = path.join(__dirname, 'schema.pg.sql');
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+    await sql.unsafe(schema);
+    console.log('Schema applied.');
+  } else {
+    console.log('Schema already applied; skipping CREATE TABLE statements.');
+  }
 
   // 2. First-boot seed: only runs if markets table is empty.
   const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM markets`;
