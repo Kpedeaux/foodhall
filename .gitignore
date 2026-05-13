@@ -1,0 +1,42 @@
+# Environment variables (Square token, JWT secret, etc.)
+.env
+.env.local
+.env.*.local
+
+# Database files (default location + global safety net for any SQLite artifact)
+server/data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Vite dev-server cache (and the timestamp shims it leaves behind)
+.vite/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local backups (do not commit)
+*.bak

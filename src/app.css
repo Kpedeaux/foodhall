@@ -1,0 +1,691 @@
+/* ============================================================
+   St. Roch Market — Food Hall Manager
+   Est. 1875 · New Orleans
+   Victorian-inspired, dusty green & ivory palette
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Brand palette */
+  --srm-black: #1a1a1a;
+  --srm-charcoal: #2a2a28;
+  --srm-dark: #333330;
+  --srm-green: #6b7c5e;
+  --srm-green-light: #7d8e6e;
+  --srm-green-muted: #8a9a7c;
+  --srm-green-pale: #c8d4be;
+  --srm-green-wash: #eef2eb;
+  --srm-ivory: #f5f3ee;
+  --srm-cream: #faf8f4;
+  --srm-warm-white: #fdfcf9;
+  --srm-gold: #b8a88a;
+  --srm-gold-light: #d4c9b0;
+  --srm-border: #e0ddd5;
+  --srm-border-light: #eae7e0;
+  --srm-text: #2a2a28;
+  --srm-text-secondary: #6b6b65;
+  --srm-text-muted: #9a9a92;
+
+  /* Semantic */
+  --color-primary: var(--srm-charcoal);
+  --color-primary-light: var(--srm-dark);
+  --color-accent: var(--srm-green);
+  --color-accent-hover: var(--srm-green-light);
+  --color-success: var(--srm-green);
+  --color-success-bg: var(--srm-green-wash);
+  --color-danger: #a65d57;
+  --color-danger-bg: #f9efee;
+  --color-warning: #b8943a;
+  --color-warning-bg: #faf5e8;
+  --color-bg: var(--srm-ivory);
+  --color-surface: var(--srm-warm-white);
+  --color-border: var(--srm-border);
+  --color-text: var(--srm-text);
+  --color-text-secondary: var(--srm-text-secondary);
+  --color-text-muted: var(--srm-text-muted);
+  --radius: 4px;
+  --radius-lg: 8px;
+  --shadow-sm: 0 1px 3px rgba(42,42,40,0.06);
+  --shadow: 0 2px 8px rgba(42,42,40,0.08);
+  --shadow-md: 0 4px 16px rgba(42,42,40,0.1);
+  --font-display: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   Layout
+   ============================================================ */
+
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background: var(--srm-black);
+  color: var(--srm-ivory);
+  display: flex;
+  align-items: center;
+  padding: 0 1.5rem;
+  height: 60px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-bottom: 2px solid var(--srm-green);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+.app-logo {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.3rem;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--srm-cream);
+  text-transform: uppercase;
+}
+
+.app-logo img {
+  height: 32px;
+  margin-right: 0.6rem;
+  vertical-align: middle;
+  opacity: 0.9;
+}
+
+.header-nav {
+  display: flex;
+  gap: 0.15rem;
+  margin-left: 2.5rem;
+  flex: 1;
+}
+
+.nav-link {
+  color: var(--srm-gold-light);
+  text-decoration: none;
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 0.15s;
+}
+.nav-link:hover {
+  color: var(--srm-cream);
+  background: rgba(255,255,255,0.07);
+}
+.nav-link.active {
+  color: var(--srm-cream);
+  background: var(--srm-green);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.header-user {
+  font-size: 0.82rem;
+  color: var(--srm-gold-light);
+  margin-right: 0.5rem;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 0.95rem;
+}
+
+.app-main {
+  flex: 1;
+  padding: 1.5rem;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   Login Page
+   ============================================================ */
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--srm-black);
+  background-image: url('/market-interior.jpg');
+  background-size: cover;
+  background-position: center;
+  position: relative;
+}
+
+.login-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(26, 26, 26, 0.7);
+  pointer-events: none;
+}
+
+.login-card {
+  background: rgba(253, 252, 249, 0.95);
+  backdrop-filter: blur(12px);
+  padding: 2.5rem;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  width: 100%;
+  max-width: 400px;
+  position: relative;
+  z-index: 1;
+  border-top: 3px solid var(--srm-green);
+}
+
+.login-card h1 {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+  color: var(--srm-charcoal);
+  letter-spacing: 0.02em;
+}
+
+.login-subtitle {
+  color: var(--color-text-muted);
+  margin-bottom: 1.5rem;
+  font-size: 0.88rem;
+}
+
+.login-logo {
+  display: block;
+  width: 180px;
+  margin: 0 auto 1.5rem;
+}
+
+/* ============================================================
+   Forms
+   ============================================================ */
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.35rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+input[type="text"], input[type="password"], input[type="email"], input[type="number"],
+select, textarea {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  font-family: var(--font-body);
+  transition: border-color 0.15s;
+  background: white;
+  color: var(--color-text);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--srm-green);
+  box-shadow: 0 0 0 3px rgba(107, 124, 94, 0.12);
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1rem;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-decoration: none;
+  gap: 0.4rem;
+  letter-spacing: 0.02em;
+}
+
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--srm-green);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) { background: var(--srm-green-light); }
+
+.btn-success {
+  background: var(--srm-green);
+  color: white;
+}
+.btn-success:hover:not(:disabled) { background: #5a6b4e; }
+
+.btn-danger {
+  background: var(--color-danger);
+  color: white;
+}
+.btn-danger:hover:not(:disabled) { background: #8f4f49; }
+
+.btn-warning {
+  background: var(--color-warning);
+  color: white;
+}
+.btn-warning:hover:not(:disabled) { background: #a38234; }
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.btn-outline:hover:not(:disabled) { background: var(--srm-ivory); border-color: var(--srm-green-muted); }
+
+.btn-ghost {
+  background: transparent;
+  border: none;
+  color: var(--srm-gold-light);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-family: var(--font-body);
+}
+.btn-ghost:hover { color: var(--srm-cream); }
+
+.btn-sm { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+.btn-full { width: 100%; }
+
+/* ============================================================
+   Alerts
+   ============================================================ */
+
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.alert-error { background: var(--color-danger-bg); color: var(--color-danger); border: 1px solid #e8d0ce; }
+.alert-success { background: var(--color-success-bg); color: var(--color-success); border: 1px solid var(--srm-green-pale); }
+.alert-warning { background: var(--color-warning-bg); color: var(--color-warning); border: 1px solid #ece0bf; }
+.alert-info { background: #eef2eb; color: var(--srm-green); border: 1px solid var(--srm-green-pale); }
+
+/* ============================================================
+   Cards
+   ============================================================ */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.card-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-header h2 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--srm-charcoal);
+  letter-spacing: 0.01em;
+}
+
+.card-body { padding: 1.25rem; }
+
+/* ============================================================
+   Tables
+   ============================================================ */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--srm-border);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--srm-border-light);
+}
+
+.data-table tbody tr:hover { background: var(--srm-green-wash); }
+
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.data-table .num.positive { color: var(--srm-green); }
+.data-table .num.negative { color: var(--color-danger); }
+
+.data-table tfoot td {
+  font-weight: 700;
+  border-top: 2px solid var(--srm-border);
+  border-bottom: none;
+}
+
+.data-table tbody tr:nth-child(even) { background: var(--srm-cream); }
+.data-table tbody tr:nth-child(even):hover { background: var(--srm-green-wash); }
+
+/* ============================================================
+   Status Badges
+   ============================================================ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-draft {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid #ece0bf;
+}
+.badge-approved {
+  background: var(--color-success-bg);
+  color: var(--srm-green);
+  border: 1px solid var(--srm-green-pale);
+}
+.badge-linen {
+  background: #f3f0f8;
+  color: #6b5b8a;
+  border: 1px solid #ddd6e8;
+}
+
+/* ============================================================
+   Page Headers
+   ============================================================ */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--srm-charcoal);
+  letter-spacing: 0.01em;
+}
+
+.page-header .actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* ============================================================
+   Week Selector
+   ============================================================ */
+
+.week-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.week-selector .week-display {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 600;
+  min-width: 260px;
+  text-align: center;
+  color: var(--srm-charcoal);
+}
+
+.week-nav-btn {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.15s;
+  color: var(--srm-green);
+}
+.week-nav-btn:hover {
+  background: var(--srm-green-wash);
+  border-color: var(--srm-green-muted);
+}
+
+/* ============================================================
+   Summary Grid
+   ============================================================ */
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.summary-item {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.15rem;
+  border-left: 3px solid var(--srm-border);
+}
+
+.summary-item .label {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.summary-item .value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--srm-charcoal);
+}
+
+.summary-item .value.positive {
+  color: var(--srm-green);
+}
+.summary-item .value.negative {
+  color: var(--color-danger);
+}
+
+/* ============================================================
+   Modal / Dialog
+   ============================================================ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(26,26,26,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  border-top: 3px solid var(--srm-green);
+}
+
+.modal-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-header h3 {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.modal-body { padding: 1.25rem; }
+
+.modal-footer {
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* ============================================================
+   Loading
+   ============================================================ */
+
+.loading-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  color: var(--color-text-secondary);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.05rem;
+}
+
+/* ============================================================
+   Utility
+   ============================================================ */
+
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+.text-muted { color: var(--color-text-muted); }
+.text-sm { font-size: 0.85rem; }
+.mt-1 { margin-top: 0.5rem; }
+.mt-2 { margin-top: 1rem; }
+.mt-3 { margin-top: 1.5rem; }
+.mb-1 { margin-bottom: 0.5rem; }
+.mb-2 { margin-bottom: 1rem; }
+.flex-between { display: flex; justify-content: space-between; align-items: center; }
+.gap-1 { gap: 0.5rem; }
+.gap-2 { gap: 1rem; }
+.inline-flex { display: inline-flex; align-items: center; }
+
+/* ============================================================
+   Decorative Victorian Dividers
+   ============================================================ */
+
+.page-header::after {
+  content: '';
+  display: none;
+}
+
+/* Subtle ornamental line under header */
+.app-header::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--srm-green) 20%, var(--srm-green) 80%, transparent);
+}
+
+/* ============================================================
+   Scrollbar Styling
+   ============================================================ */
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--srm-ivory); }
+::-webkit-scrollbar-thumb { background: var(--srm-border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--srm-text-muted); }
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+
+@media (max-width: 768px) {
+  .app-header {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 0.75rem 1rem;
+  }
+  .header-nav {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    margin-top: 0.5rem;
+    overflow-x: auto;
+  }
+  .app-main {
+    padding: 1rem;
+  }
+  .summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .page-header h1 {
+    font-size: 1.35rem;
+  }
+}
