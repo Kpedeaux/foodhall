@@ -46,21 +46,45 @@ const sql = postgres(process.env.DATABASE_URL, {
   max: 4,
 });
 
-// ── Apply schema first ──────────────────────────────────────
+// ── Detect target state and clean up if needed ───────────────
+// Three possibilities:
+//   A) Truly empty target  → apply schema, import
+//   B) Tables exist but no data (e.g. a previous failed import)  → drop, re-apply, import
+//   C) Tables exist WITH data  → refuse, require manual reset
+const fhTables = [
+  'adjustments', 'weekly_summaries', 'daily_calculations',
+  'weekly_periods', 'audit_log', 'users', 'vendors', 'markets',
+  'schema_migrations'
+];
+const existingRows = await sql`
+  SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY(${fhTables})
+`;
+const existingTables = existingRows.map(r => r.tablename);
+
+if (existingTables.length > 0) {
+  let hasData = false;
+  for (const t of existingTables) {
+    if (t === 'schema_migrations') continue;  // pre-seeded; not user data
+    const [{ count }] = await sql.unsafe(`SELECT COUNT(*)::int AS count FROM ${t}`);
+    if (count > 0) { hasData = true; break; }
+  }
+  if (hasData) {
+    console.log('\n⚠️  Target database already has FoodHall data.');
+    console.log('    To re-import, manually drop the tables first:');
+    console.log(`      DROP TABLE IF EXISTS ${fhTables.join(', ')} CASCADE;`);
+    await sql.end();
+    process.exit(1);
+  }
+  console.log('\n[0/3] Found empty FoodHall tables from a prior failed run. Dropping for clean retry...');
+  await sql.unsafe(`DROP TABLE IF EXISTS ${fhTables.join(', ')} CASCADE`);
+  console.log('     dropped');
+}
+
+// ── Apply schema ────────────────────────────────────────────
 console.log('\n[1/3] Applying Postgres schema...');
 const schemaSql = fs.readFileSync(path.join(__dirname, '..', 'server', 'db', 'schema.pg.sql'), 'utf8');
 await sql.unsafe(schemaSql);
 console.log('     schema applied');
-
-// ── Detect existing data ────────────────────────────────────
-const [{ count: existingMarkets }] = await sql`SELECT COUNT(*)::int AS count FROM markets`;
-if (existingMarkets > 0) {
-  console.log(`\n⚠️  Target database already has ${existingMarkets} market(s).`);
-  console.log('    To re-import, manually TRUNCATE the tables first:');
-  console.log('      psql $DATABASE_URL -c "TRUNCATE adjustments, weekly_summaries, daily_calculations, weekly_periods, audit_log, users, vendors, markets RESTART IDENTITY CASCADE;"');
-  await sql.end();
-  process.exit(1);
-}
 
 // ── Helpers ─────────────────────────────────────────────────
 const tables = [
