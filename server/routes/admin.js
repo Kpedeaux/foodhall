@@ -32,7 +32,6 @@ router.get('/vendors', async (req, res, next) => {
       SELECT * FROM vendors WHERE market_id = ${req.user.market_id} ORDER BY name
     `;
 
-    // Also get unconfigured Square locations (skip for non-production markets like demo)
     let unconfigured = [];
     const [market] = await sql`
       SELECT square_environment FROM markets WHERE id = ${req.user.market_id}
@@ -167,21 +166,18 @@ router.get('/weeks/:id', async (req, res, next) => {
       ORDER BY a.created_at
     `;
 
-    // Group daily calcs by vendor
     const dailyByVendor = {};
     for (const dc of dailyCalcs) {
       if (!dailyByVendor[dc.vendor_id]) dailyByVendor[dc.vendor_id] = [];
       dailyByVendor[dc.vendor_id].push(dc);
     }
 
-    // Group adjustments by vendor
     const adjByVendor = {};
     for (const adj of adjustments) {
       if (!adjByVendor[adj.vendor_id]) adjByVendor[adj.vendor_id] = [];
       adjByVendor[adj.vendor_id].push(adj);
     }
 
-    // Calculate grand totals
     const grandTotals = {
       totalSales: 0, totalMarketFees: 0, totalDeliveryFees: 0,
       totalSquareFees: 0, totalCash: 0, totalTransfers: 0,
@@ -205,7 +201,6 @@ router.get('/weeks/:id', async (req, res, next) => {
       };
     });
 
-    // Round grand totals
     for (const key of Object.keys(grandTotals)) {
       grandTotals[key] = Math.round(grandTotals[key] * 100) / 100;
     }
@@ -214,9 +209,6 @@ router.get('/weeks/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Pre-flight check: confirm Square is reachable BEFORE the destructive
-// recalculation runs. If Square is down or the token is misconfigured
-// we want to fail fast with a clear error, not mid-way through a pull.
 async function assertSquareReachable() {
   try {
     await listLocations();
@@ -226,7 +218,6 @@ async function assertSquareReachable() {
   }
 }
 
-// Pull Square data and calculate
 router.post('/weeks/pull', async (req, res, next) => {
   const { weekStart, isLinenWeek, closureDays } = req.body;
   if (!weekStart) return res.status(400).json({ error: 'weekStart required' });
@@ -243,7 +234,6 @@ router.post('/weeks/pull', async (req, res, next) => {
   }
 });
 
-// Recalculate a draft week (re-pull from Square)
 router.post('/weeks/:id/recalculate', async (req, res, next) => {
   try {
     const [week] = await sql`
@@ -253,7 +243,6 @@ router.post('/weeks/:id/recalculate', async (req, res, next) => {
     if (week.status !== 'draft') return res.status(400).json({ error: 'Can only recalculate draft weeks' });
 
     await assertSquareReachable();
-    // closure_days is now JSONB so postgres.js returns it pre-parsed
     const savedClosureDays = Array.isArray(week.closure_days) ? week.closure_days : [];
     const closureDays = req.body.closureDays || savedClosureDays;
     const result = await calculateTransfersForWeek(
@@ -266,7 +255,6 @@ router.post('/weeks/:id/recalculate', async (req, res, next) => {
   }
 });
 
-// Approve a week
 router.post('/weeks/:id/approve', async (req, res, next) => {
   try {
     const [week] = await sql`
@@ -286,7 +274,6 @@ router.post('/weeks/:id/approve', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Unlock an approved week
 router.post('/weeks/:id/unlock', async (req, res, next) => {
   try {
     const [week] = await sql`
@@ -314,7 +301,6 @@ router.post('/adjustments', async (req, res, next) => {
   try {
     const { weekly_summary_id, type, amount, description } = req.body;
 
-    // Verify the summary belongs to this market
     const [summary] = await sql`
       SELECT ws.*, wp.market_id, wp.status
       FROM weekly_summaries ws
@@ -335,7 +321,6 @@ router.post('/adjustments', async (req, res, next) => {
       RETURNING id
     `;
 
-    // Recalculate net_transfer
     await recalcNetTransfer(weekly_summary_id);
 
     await auditLog(req.user.market_id, req.user.id, 'add_adjustment', 'adjustment', result.id, { type, amount, description });
@@ -368,10 +353,6 @@ router.delete('/adjustments/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Adjustments use signed amounts (accounting convention):
-//   positive = credit to vendor (adds to transfer)
-//   negative = fine/deduction (subtracts from transfer)
-// So adjustments are ADDED to gross_transfer here.
 async function recalcNetTransfer(weeklySummaryId) {
   const [adjs] = await sql`
     SELECT COALESCE(SUM(amount), 0) AS total FROM adjustments WHERE weekly_summary_id = ${weeklySummaryId}
@@ -417,13 +398,23 @@ router.post('/users', async (req, res, next) => {
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
     }
-    // Enforce password policy on new user creation
     const policy = validatePassword(password);
     if (!policy.valid) {
       return res.status(400).json({ error: policy.errors.join('. ') });
     }
     if (role === 'vendor' && !vendor_id) {
       return res.status(400).json({ error: 'Vendor accounts must be linked to a vendor' });
+    }
+
+    // ── H2 (2026-05-15 audit) ───────────────────────────────────
+    // If vendor_id is supplied, verify it belongs to the caller's market.
+    if (vendor_id !== undefined && vendor_id !== null) {
+      const [v] = await sql`
+        SELECT id FROM vendors WHERE id = ${vendor_id} AND market_id = ${req.user.market_id}
+      `;
+      if (!v) {
+        return res.status(400).json({ error: 'vendor_id does not belong to your market' });
+      }
     }
 
     const hash = bcrypt.hashSync(password, 12);
@@ -436,7 +427,6 @@ router.post('/users', async (req, res, next) => {
         RETURNING id
       `;
     } catch (err) {
-      // Postgres unique-constraint code: 23505
       if (err.code === '23505') {
         return res.status(400).json({ error: 'Username already exists' });
       }
@@ -457,7 +447,22 @@ router.put('/users/:id', async (req, res, next) => {
     `;
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    // Strict body allowlist — never trust the client to scope which columns
+    // can be set. Anything outside this list is silently dropped.
     const { username, email, active, vendor_id } = req.body;
+
+    // ── H2 (2026-05-15 audit) ───────────────────────────────────
+    // If vendor_id is being set, verify it belongs to the caller's market.
+    // Without this check, an admin in market A can reassign one of their
+    // vendor accounts to a vendor row in market B and read its data.
+    if (vendor_id !== undefined && vendor_id !== null) {
+      const [v] = await sql`
+        SELECT id FROM vendors WHERE id = ${vendor_id} AND market_id = ${req.user.market_id}
+      `;
+      if (!v) {
+        return res.status(400).json({ error: 'vendor_id does not belong to your market' });
+      }
+    }
 
     await sql`
       UPDATE users SET
@@ -468,7 +473,11 @@ router.put('/users/:id', async (req, res, next) => {
       WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
     `;
 
-    await auditLog(req.user.market_id, req.user.id, 'update_user', 'user', req.params.id, req.body);
+    // Log only the fields actually accepted; never the raw req.body
+    // (which may contain a stray `password` field or other surprises).
+    await auditLog(req.user.market_id, req.user.id, 'update_user', 'user', req.params.id, {
+      username, email, active, vendor_id,
+    });
     res.json({ success: true });
   } catch (err) { next(err); }
 });
@@ -479,6 +488,18 @@ router.post('/users/:id/reset-password', async (req, res, next) => {
       SELECT * FROM users WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
     `;
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // ── C1 (2026-05-15 audit) ───────────────────────────────────
+    // Admins cannot reset OTHER admins' passwords. One compromised admin
+    // account must not unlock the rest of the admin tier. An admin who
+    // needs to change their own password uses /api/auth/change-password
+    // (requires current password). An admin who lost their password uses
+    // the lost-password flow (out-of-band).
+    if (user.role === 'admin' && user.id !== req.user.id) {
+      return res.status(403).json({
+        error: "Admins cannot reset other admins' passwords. The target admin must change their own password via the lost-password flow."
+      });
+    }
 
     const { newPassword } = req.body;
     const policy = validatePassword(newPassword);

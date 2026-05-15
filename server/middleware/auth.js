@@ -23,6 +23,10 @@ if (!JWT_SECRET) {
 const ACCESS_TOKEN_EXPIRY = '2h';     // Short-lived access token
 const REFRESH_TOKEN_EXPIRY = '7d';    // Longer-lived refresh token
 
+// JWT algorithm we sign with. Pinned on every verify (H5 — 2026-05-15 audit)
+// to guard against library regressions or downgrade attacks.
+const JWT_ALG = 'HS256';
+
 // ── Authenticate middleware ─────────────────────────────────
 // Verifies JWT AND checks that the user is still active in the database.
 // This closes the gap where a deactivated user's token still works.
@@ -35,7 +39,8 @@ export async function authenticate(req, res, next) {
   let decoded;
   try {
     const token = authHeader.split(' ')[1];
-    decoded = jwt.verify(token, JWT_SECRET);
+    // H5 (2026-05-15 audit): pin the algorithm explicitly.
+    decoded = jwt.verify(token, JWT_SECRET, { algorithms: [JWT_ALG] });
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
@@ -79,15 +84,22 @@ export function requireVendor(req, res, next) {
 
 // ── Token signing ───────────────────────────────────────────
 export function signAccessToken(payload) {
-  return jwt.sign({ ...payload, type: 'access' }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
+  return jwt.sign({ ...payload, type: 'access' }, JWT_SECRET, {
+    algorithm: JWT_ALG,
+    expiresIn: ACCESS_TOKEN_EXPIRY,
+  });
 }
 
 export function signRefreshToken(payload) {
-  return jwt.sign({ id: payload.id, type: 'refresh' }, JWT_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRY });
+  return jwt.sign({ id: payload.id, type: 'refresh' }, JWT_SECRET, {
+    algorithm: JWT_ALG,
+    expiresIn: REFRESH_TOKEN_EXPIRY,
+  });
 }
 
 export function verifyRefreshToken(token) {
-  const decoded = jwt.verify(token, JWT_SECRET);
+  // H5 (2026-05-15 audit): pin the algorithm explicitly.
+  const decoded = jwt.verify(token, JWT_SECRET, { algorithms: [JWT_ALG] });
   if (decoded.type !== 'refresh') {
     throw new Error('Not a refresh token');
   }
