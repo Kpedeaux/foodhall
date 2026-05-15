@@ -32,7 +32,7 @@ export default function VendorSettings() {
       name: '', square_location_id: '', plan_type: 'STANDARD',
       percentage_rate: 0.30, daily_base_rent: 150, delivery_fee_rate: 0.105,
       service_charge_rate: 0.02, weekly_minimum: 0, linen_charge: 20,
-      active: 1, departed_date: '', is_excluded: 0,
+      active: true, departed_date: '', is_excluded: false,
     });
     setError('');
   };
@@ -152,7 +152,7 @@ export default function VendorSettings() {
                   )}
                 </div>
                 <label className="inline-flex gap-1" style={{ fontSize: '0.875rem', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={!!form.is_excluded} onChange={(e) => updateForm('is_excluded', e.target.checked ? 1 : 0)} />
+                  <input type="checkbox" checked={!!form.is_excluded} onChange={(e) => updateForm('is_excluded', e.target.checked)} />
                   Excluded (market operation)
                 </label>
               </div>

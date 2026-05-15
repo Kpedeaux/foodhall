@@ -71,11 +71,20 @@ export default function UserManagement() {
   };
 
   const toggleActive = async (user) => {
-    await apiFetch(`/api/admin/users/${user.id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ active: user.active ? 0 : 1 }),
-    });
-    await loadData();
+    setError('');
+    try {
+      const res = await apiFetch(`/api/admin/users/${user.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ active: !user.active }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to ${user.active ? 'deactivate' : 'activate'} user`);
+      }
+      await loadData();
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   if (loading) return <div className="loading-spinner">Loading users...</div>;
@@ -159,6 +168,10 @@ export default function UserManagement() {
             </div>
           </div>
         </div>
+      )}
+
+      {error && !showModal && !showResetModal && (
+        <div className="alert alert-error mb-2">{error}</div>
       )}
 
       <div className="card">

@@ -9,6 +9,22 @@ import { validatePassword } from '../middleware/passwordPolicy.js';
 const router = Router();
 router.use(authenticate, requireAdmin);
 
+// ── Input coercion ──────────────────────────────
+// Postgres BOOLEAN columns reject int4/text via the wire protocol, so any
+// client that sends 0/1 or "true"/"false" must be coerced here. Returns a
+// real boolean, or null if the input is missing/unrecognized — callers
+// decide whether null means "leave unchanged" or "reject as 400".
+function coerceBool(v) {
+  if (v === true || v === false) return v;
+  if (v === 1 || v === 0) return v === 1;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (s === 'true' || s === '1' || s === 't' || s === 'yes') return true;
+    if (s === 'false' || s === '0' || s === 'f' || s === 'no') return false;
+  }
+  return null;
+}
+
 // ============================================================
 // Square Locations
 // ============================================================
@@ -58,6 +74,18 @@ router.post('/vendors', async (req, res, next) => {
       active, departed_date, is_excluded
     } = req.body;
 
+    // Coerce boolean inputs. undefined → schema default (true / false).
+    let activeBool = true;
+    if (active !== undefined && active !== null) {
+      activeBool = coerceBool(active);
+      if (activeBool === null) return res.status(400).json({ error: 'active must be a boolean' });
+    }
+    let isExcludedBool = false;
+    if (is_excluded !== undefined && is_excluded !== null) {
+      isExcludedBool = coerceBool(is_excluded);
+      if (isExcludedBool === null) return res.status(400).json({ error: 'is_excluded must be a boolean' });
+    }
+
     const [result] = await sql`
       INSERT INTO vendors (
         market_id, name, square_location_id, plan_type, percentage_rate, daily_base_rent,
@@ -68,7 +96,7 @@ router.post('/vendors', async (req, res, next) => {
         ${plan_type || 'STANDARD'}, ${percentage_rate ?? 0.30}, ${daily_base_rent ?? 0},
         ${delivery_fee_rate ?? 0.105}, ${service_charge_rate ?? 0.02},
         ${weekly_minimum ?? 0}, ${linen_charge ?? 0},
-        ${active ?? true}, ${departed_date || null}, ${is_excluded ?? false}
+        ${activeBool}, ${departed_date || null}, ${isExcludedBool}
       )
       RETURNING id
     `;
@@ -93,6 +121,20 @@ router.put('/vendors/:id', async (req, res, next) => {
       active, departed_date, is_excluded
     } = req.body;
 
+    // Coerce boolean inputs. undefined/null → leave unchanged.
+    let nextActive = vendor.active;
+    if (active !== undefined && active !== null) {
+      const b = coerceBool(active);
+      if (b === null) return res.status(400).json({ error: 'active must be a boolean' });
+      nextActive = b;
+    }
+    let nextIsExcluded = vendor.is_excluded;
+    if (is_excluded !== undefined && is_excluded !== null) {
+      const b = coerceBool(is_excluded);
+      if (b === null) return res.status(400).json({ error: 'is_excluded must be a boolean' });
+      nextIsExcluded = b;
+    }
+
     await sql`
       UPDATE vendors SET
         name = ${name ?? vendor.name},
@@ -104,9 +146,9 @@ router.put('/vendors/:id', async (req, res, next) => {
         service_charge_rate = ${service_charge_rate ?? vendor.service_charge_rate},
         weekly_minimum = ${weekly_minimum ?? vendor.weekly_minimum},
         linen_charge = ${linen_charge ?? vendor.linen_charge},
-        active = ${active ?? vendor.active},
+        active = ${nextActive},
         departed_date = ${departed_date !== undefined ? (departed_date || null) : vendor.departed_date},
-        is_excluded = ${is_excluded ?? vendor.is_excluded},
+        is_excluded = ${nextIsExcluded},
         updated_at = now()
       WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
     `;
@@ -464,11 +506,24 @@ router.put('/users/:id', async (req, res, next) => {
       }
     }
 
+    // Coerce `active` to a real boolean. Postgres BOOLEAN columns reject
+    // integers/strings over the wire, so a client that sends `active: 0`
+    // would otherwise blow up with a cryptic type error. undefined/null
+    // means "leave unchanged"; anything else must be a recognized boolean.
+    let nextActive = user.active;
+    if (active !== undefined && active !== null) {
+      const b = coerceBool(active);
+      if (b === null) {
+        return res.status(400).json({ error: 'active must be a boolean' });
+      }
+      nextActive = b;
+    }
+
     await sql`
       UPDATE users SET
         username = ${username ?? user.username},
         email = ${email ?? user.email},
-        active = ${active ?? user.active},
+        active = ${nextActive},
         vendor_id = ${vendor_id ?? user.vendor_id}
       WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
     `;
@@ -476,7 +531,7 @@ router.put('/users/:id', async (req, res, next) => {
     // Log only the fields actually accepted; never the raw req.body
     // (which may contain a stray `password` field or other surprises).
     await auditLog(req.user.market_id, req.user.id, 'update_user', 'user', req.params.id, {
-      username, email, active, vendor_id,
+      username, email, active: nextActive, vendor_id,
     });
     res.json({ success: true });
   } catch (err) { next(err); }
