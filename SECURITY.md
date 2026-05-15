@@ -44,7 +44,7 @@
 4. **Verify `.env` was never committed:**
    ```
    git log --all --full-history -- .env
-   git log -S "EAAAl-CeHmmNulGoLyvW6YhVcShvJt3yLDRkFCUYv4mV0VYhAaKv0HRH0mKOZNgt" --all
+   git log -S "<OLD_SQUARE_TOKEN_REDACTED>" --all
    ```
 
 5. **Verify your CoreRail folder is not synced to OneDrive/iCloud/Dropbox.** If it is, the Square token has been to the cloud.
