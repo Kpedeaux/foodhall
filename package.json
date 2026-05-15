@@ -33,6 +33,6 @@
     "vite": "^5.4.0"
   },
   "overrides": {
-    "path-to-regexp": "^6.3.0"
+    "path-to-regexp": "^0.1.13"
   }
 }
