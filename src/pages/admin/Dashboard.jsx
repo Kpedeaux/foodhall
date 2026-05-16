@@ -113,13 +113,32 @@ export default function Dashboard() {
   useEffect(() => { loadWeeks(); }, [loadWeeks]);
   useEffect(() => { if (weeks.length > 0) loadWeekData(weekStart); }, [weekStart, weeks, loadWeekData]);
 
-  // Safely parse a Response body that may be empty / non-JSON
-  // (e.g. when a proxy truncates or the server dies mid-request).
+  // Safely parse a Response body that may be empty / non-JSON.
+  // The common non-JSON case is an HTML error page returned by a CDN /
+  // edge proxy (DO gateway 5xx, Cloudflare 502/504/524, etc.) when the
+  // request times out or the origin is unreachable. Dumping the raw HTML
+  // into the alert produces an unreadable wall of markup, so we detect
+  // HTML, lift the most useful signal (status code + <title> if present),
+  // and discard the body.
   const readJsonSafely = async (res) => {
     const text = await res.text();
     if (!text) return null;
     try { return JSON.parse(text); }
-    catch { return { error: text.slice(0, 500) }; }
+    catch {
+      const looksLikeHtml = /<!DOCTYPE\s+html|<html/i.test(text);
+      if (looksLikeHtml) {
+        const titleMatch = text.match(/<title>([^<]+)<\/title>/i);
+        const title = titleMatch ? titleMatch[1].trim() : '';
+        const detail = title
+          ? `HTTP ${res.status} — ${title}`
+          : `HTTP ${res.status} from edge proxy`;
+        return {
+          error: `${detail}. The server didn't return JSON, which usually means the request timed out at the load balancer (~60s on DO App Platform) before the pull finished. Check Runtime Logs and consider re-pulling.`,
+        };
+      }
+      // Plain-text non-JSON (rare) — pass through truncated.
+      return { error: text.slice(0, 500) };
+    }
   };
 
   const handlePull = async () => {
