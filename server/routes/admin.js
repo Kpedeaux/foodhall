@@ -256,7 +256,15 @@ async function assertSquareReachable() {
     await listLocations();
   } catch (err) {
     const msg = err?.message || String(err);
-    throw Object.assign(new Error(`Square is not reachable: ${msg}`), { status: 502 });
+    // Upstream auth/config failures get 503 (Service Unavailable) rather than
+    // 502, because edge proxies (Cloudflare, DO App Platform) routinely replace
+    // 502 origin responses with their own HTML error pages — which destroys
+    // the JSON body the SPA relies on. 503 passes through.
+    const isAuth = /UNAUTHORIZED|AUTHENTICATION_ERROR|not authorized/i.test(msg);
+    const userMessage = isAuth
+      ? 'Square access token is rejected by Square. Verify SQUARE_ACCESS_TOKEN and SQUARE_ENVIRONMENT in App Platform → Settings → Components → foodhall → Environment Variables.'
+      : `Square is not reachable: ${msg}`;
+    throw Object.assign(new Error(userMessage), { status: 503 });
   }
 }
 
