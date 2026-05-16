@@ -102,7 +102,14 @@ export async function initDb() {
     console.log('Schema already applied; skipping CREATE TABLE statements.');
   }
 
-  // 2. First-boot seed: only runs if markets table is empty.
+  // 2a. Bootstrap initial super admin (cross-tenant operator). Runs every
+  // boot but is a no-op if any super_admin row already exists, or if the
+  // INITIAL_SUPER_ADMIN_* env vars aren't set. Placed BEFORE the
+  // market-empty check so existing databases still get bootstrapped on
+  // first deploy of the super-admin feature.
+  await bootstrapSuperAdmin();
+
+  // 2b. First-boot seed: only runs if markets table is empty.
   const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM markets`;
   if (count > 0) return;
 
@@ -143,11 +150,6 @@ export async function initDb() {
   });
 
   console.log(`✅ Seeded: market "${initialMarket}" + admin user "${initialUsername}" (must change password on first login)`);
-
-  // ── Bootstrap initial super admin (cross-tenant operator) ────
-  // Runs every boot but is a no-op if any super_admin row already exists.
-  // INITIAL_SUPER_ADMIN_PASSWORD must be 12+ chars; same policy as INITIAL_ADMIN_PASSWORD.
-  await bootstrapSuperAdmin();
 }
 
 async function bootstrapSuperAdmin() {
