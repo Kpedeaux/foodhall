@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import vendorRoutes from './routes/vendors.js';
 import exportRoutes from './routes/export.js';
+import superRoutes from './routes/super.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,6 +71,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/vendor', vendorRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/super',  superRoutes);
 
 // Serve React frontend in production
 if (process.env.NODE_ENV === 'production') {

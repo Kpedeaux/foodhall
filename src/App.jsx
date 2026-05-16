@@ -4,6 +4,10 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminLayout, VendorLayout } from './components/Layout';
 import Login from './pages/Login';
+import SuperLogin from './pages/super/SuperLogin';
+import SuperDashboard from './pages/super/SuperDashboard';
+import MarketDetail from './pages/super/MarketDetail';
+import { SuperLayout } from './components/SuperLayout';
 import ChangePassword from './pages/ChangePassword';
 import Dashboard from './pages/admin/Dashboard';
 import VendorDetail from './pages/admin/VendorDetail';
@@ -52,9 +56,20 @@ function AppRoutes() {
         <ProtectedRoute requiredRole="vendor"><VendorLayout><VendorDashboard /></VendorLayout></ProtectedRoute>
       } />
 
+      {/* Super Admin routes */}
+      <Route path="/super/login" element={<SuperLogin />} />
+      <Route path="/super" element={
+        <ProtectedRoute requiredRole="super_admin"><SuperLayout><SuperDashboard /></SuperLayout></ProtectedRoute>
+      } />
+      <Route path="/super/markets/:id" element={
+        <ProtectedRoute requiredRole="super_admin"><SuperLayout><MarketDetail /></SuperLayout></ProtectedRoute>
+      } />
+
       {/* Default redirect */}
       <Route path="/" element={
-        user ? <Navigate to={user.role === 'admin' ? '/admin' : '/vendor'} replace /> : <Navigate to="/login" replace />
+        user
+          ? <Navigate to={user.role === 'super_admin' ? '/super' : user.role === 'admin' ? '/admin' : '/vendor'} replace />
+          : <Navigate to="/login" replace />
       } />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

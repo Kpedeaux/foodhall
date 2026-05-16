@@ -16,9 +16,12 @@ export function ProtectedRoute({ children, requiredRole }) {
     return <Navigate to="/change-password" replace />;
   }
 
-  // Role check
+  // Role check — bounce to the home page appropriate for the user's actual role.
   if (requiredRole && user.role !== requiredRole) {
-    return <Navigate to={user.role === 'admin' ? '/admin' : '/vendor'} replace />;
+    const dest = user.role === 'super_admin' ? '/super'
+               : user.role === 'admin'        ? '/admin'
+               : '/vendor';
+    return <Navigate to={dest} replace />;
   }
 
   return children;

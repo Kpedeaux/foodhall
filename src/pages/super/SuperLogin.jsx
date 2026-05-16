@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../../context/AuthContext';
 
-export default function Login() {
+export default function SuperLogin() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -17,15 +17,15 @@ export default function Login() {
 
     try {
       const user = await login(username, password);
+      if (user.role !== 'super_admin') {
+        // Don't reveal the user's actual role to attackers — generic message.
+        setError('These credentials are not authorized for Super Admin access.');
+        return;
+      }
       if (user.must_change_password) {
         navigate('/change-password');
-      } else if (user.role === 'super_admin') {
-        // Super admins shouldn't normally land here, but if they do, route them home.
-        navigate('/super');
-      } else if (user.role === 'admin') {
-        navigate('/admin');
       } else {
-        navigate('/vendor');
+        navigate('/super');
       }
     } catch (err) {
       setError(err.message);
@@ -35,41 +35,27 @@ export default function Login() {
   };
 
   return (
-    <div className="login-page">
-      <div className="login-card">
+    <div className="login-page" style={{ background: '#1a1a1a' }}>
+      <div className="login-card" style={{ border: '1px solid #6b7c5e' }}>
         <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '0.5rem' }}>
-            <svg width="36" height="36" viewBox="0 0 120 120" fill="none">
-              <rect x="54" y="10" width="12" height="100" rx="2" fill="#2C2F2A" />
-              <rect x="30" y="22" width="60" height="6" rx="1.5" fill="#2C2F2A" />
-              <rect x="30" y="57" width="60" height="6" rx="1.5" fill="#2C2F2A" />
-              <rect x="30" y="92" width="60" height="6" rx="1.5" fill="#2C2F2A" />
-              <circle cx="30" cy="25" r="6" fill="#6B7F5E" />
-              <circle cx="30" cy="60" r="6" fill="#6B7F5E" />
-              <circle cx="30" cy="95" r="6" fill="#6B7F5E" />
-              <circle cx="90" cy="25" r="6" fill="#6B7F5E" />
-              <circle cx="90" cy="60" r="6" fill="#6B7F5E" />
-              <circle cx="90" cy="95" r="6" fill="#6B7F5E" />
-            </svg>
-            <span style={{
-              fontFamily: "'Cormorant Garamond', Georgia, serif",
-              fontWeight: 700,
-              fontSize: '1.6rem',
-              letterSpacing: '0.02em',
-              color: '#2C2F2A',
-            }}>
-              CORE<span style={{ color: '#6B7F5E' }}>RAIL</span>
-            </span>
-          </div>
           <div style={{
             fontFamily: "'Cormorant Garamond', Georgia, serif",
+            fontWeight: 700,
+            fontSize: '1.6rem',
+            letterSpacing: '0.02em',
+            color: '#2C2F2A',
+          }}>
+            CORE<span style={{ color: '#6B7F5E' }}>RAIL</span>
+          </div>
+          <div style={{
+            fontFamily: 'system-ui, -apple-system, sans-serif',
             fontSize: '0.7rem',
             color: '#9a9a92',
             letterSpacing: '0.2em',
             textTransform: 'uppercase',
-            marginTop: '0.15rem',
+            marginTop: '0.4rem',
           }}>
-            Operations Infrastructure
+            Super Admin · Platform Operator
           </div>
           <div style={{
             width: '40px',
@@ -83,9 +69,9 @@ export default function Login() {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="username">Username</label>
+            <label htmlFor="su-username">Username</label>
             <input
-              id="username"
+              id="su-username"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -94,9 +80,9 @@ export default function Login() {
             />
           </div>
           <div className="form-group">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="su-password">Password</label>
             <input
-              id="password"
+              id="su-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

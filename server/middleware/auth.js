@@ -82,6 +82,13 @@ export function requireVendor(req, res, next) {
   next();
 }
 
+export function requireSuperAdmin(req, res, next) {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Super Admin access required' });
+  }
+  next();
+}
+
 // ── Token signing ───────────────────────────────────────────
 export function signAccessToken(payload) {
   return jwt.sign({ ...payload, type: 'access' }, JWT_SECRET, {

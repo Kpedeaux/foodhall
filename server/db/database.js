@@ -143,6 +143,44 @@ export async function initDb() {
   });
 
   console.log(`✅ Seeded: market "${initialMarket}" + admin user "${initialUsername}" (must change password on first login)`);
+
+  // ── Bootstrap initial super admin (cross-tenant operator) ────
+  // Runs every boot but is a no-op if any super_admin row already exists.
+  // INITIAL_SUPER_ADMIN_PASSWORD must be 12+ chars; same policy as INITIAL_ADMIN_PASSWORD.
+  await bootstrapSuperAdmin();
+}
+
+async function bootstrapSuperAdmin() {
+  const username = process.env.INITIAL_SUPER_ADMIN_USERNAME;
+  const password = process.env.INITIAL_SUPER_ADMIN_PASSWORD;
+  if (!username || !password) return; // bootstrap env vars not set — silent no-op
+
+  const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM users WHERE role = 'super_admin'`;
+  if (count > 0) return; // already bootstrapped — silent no-op
+
+  if (password.length < 12) {
+    console.error('Refusing to bootstrap super admin: INITIAL_SUPER_ADMIN_PASSWORD shorter than 12 chars.');
+    return;
+  }
+  if (password === 'changeme' || password === 'password') {
+    console.error('Refusing to bootstrap super admin: INITIAL_SUPER_ADMIN_PASSWORD must not be a known default value.');
+    return;
+  }
+
+  try {
+    const hash = bcrypt.hashSync(password, 12);
+    await sql`
+      INSERT INTO users (market_id, username, password_hash, role, must_change_password)
+      VALUES (NULL, ${username}, ${hash}, 'super_admin', TRUE)
+    `;
+    console.log(`✅ Bootstrapped initial super admin "${username}" (must change password on first login)`);
+  } catch (err) {
+    if (err.code === '23505') {
+      console.error(`Cannot bootstrap super admin: username "${username}" already exists. Choose a different INITIAL_SUPER_ADMIN_USERNAME.`);
+    } else {
+      console.error('Super admin bootstrap failed:', err.message);
+    }
+  }
 }
 
 // ── Graceful shutdown ───────────────────────────────────────
