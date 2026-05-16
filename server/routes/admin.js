@@ -269,13 +269,14 @@ async function assertSquareReachable() {
 }
 
 router.post('/weeks/pull', async (req, res, next) => {
-  const { weekStart, isLinenWeek, closureDays } = req.body;
+  const { weekStart, isLinenWeek, closureDays, earlyCloseDays } = req.body;
   if (!weekStart) return res.status(400).json({ error: 'weekStart required' });
 
   try {
     await assertSquareReachable();
     const result = await calculateTransfersForWeek(
-      req.user.market_id, weekStart, !!isLinenWeek, req.user.id, closureDays || []
+      req.user.market_id, weekStart, !!isLinenWeek, req.user.id,
+      closureDays || [], earlyCloseDays || []
     );
     res.json(result);
   } catch (err) {
@@ -294,9 +295,12 @@ router.post('/weeks/:id/recalculate', async (req, res, next) => {
 
     await assertSquareReachable();
     const savedClosureDays = Array.isArray(week.closure_days) ? week.closure_days : [];
+    const savedEarlyCloseDays = Array.isArray(week.early_close_days) ? week.early_close_days : [];
     const closureDays = req.body.closureDays || savedClosureDays;
+    const earlyCloseDays = req.body.earlyCloseDays || savedEarlyCloseDays;
     const result = await calculateTransfersForWeek(
-      req.user.market_id, week.week_start, !!week.is_linen_week, req.user.id, closureDays
+      req.user.market_id, week.week_start, !!week.is_linen_week, req.user.id,
+      closureDays, earlyCloseDays
     );
     res.json(result);
   } catch (err) {

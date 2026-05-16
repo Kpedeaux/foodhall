@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS weekly_periods (
   week_start    DATE NOT NULL,
   week_end      DATE NOT NULL,
   is_linen_week BOOLEAN NOT NULL DEFAULT FALSE,
-  closure_days  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  closure_days     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  early_close_days JSONB NOT NULL DEFAULT '[]'::jsonb,
   status        TEXT NOT NULL DEFAULT 'draft'
                   CHECK (status IN ('draft', 'approved')),
   calculated_at TIMESTAMPTZ,

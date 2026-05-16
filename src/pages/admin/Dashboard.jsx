@@ -64,6 +64,7 @@ export default function Dashboard() {
   const [pulling, setPulling] = useState(false);
   const [isLinenWeek, setIsLinenWeek] = useState(false);
   const [closureDays, setClosureDays] = useState([]);
+  const [earlyCloseDays, setEarlyCloseDays] = useState([]);
   const [error, setError] = useState('');
   const [weeks, setWeeks] = useState([]);
 
@@ -89,6 +90,7 @@ export default function Dashboard() {
     if (!existing) {
       setWeekData(null);
       setClosureDays([]);
+      setEarlyCloseDays([]);
       return;
     }
 
@@ -99,7 +101,17 @@ export default function Dashboard() {
         const data = await res.json();
         setWeekData(data);
         setIsLinenWeek(!!data.week?.is_linen_week);
-        try { setClosureDays(JSON.parse(data.week?.closure_days || '[]')); } catch { setClosureDays([]); }
+        // Postgres JSONB columns round-trip as arrays via postgres.js,
+        // but legacy SQLite rows came over as JSON strings — handle both.
+        const parseDays = (v) => {
+          if (Array.isArray(v)) return v;
+          if (typeof v === 'string' && v.length > 0) {
+            try { return JSON.parse(v); } catch { return []; }
+          }
+          return [];
+        };
+        setClosureDays(parseDays(data.week?.closure_days));
+        setEarlyCloseDays(parseDays(data.week?.early_close_days));
       } else {
         setWeekData(null);
       }
@@ -147,7 +159,7 @@ export default function Dashboard() {
     try {
       const res = await apiFetch('/api/admin/weeks/pull', {
         method: 'POST',
-        body: JSON.stringify({ weekStart, isLinenWeek, closureDays }),
+        body: JSON.stringify({ weekStart, isLinenWeek, closureDays, earlyCloseDays }),
       });
       const data = await readJsonSafely(res);
       if (!res.ok) {
@@ -233,10 +245,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Closure Days */}
+      {/* Closure / Early-close Days */}
       <div className="card mb-2" style={{ padding: '0.75rem 1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', minWidth: '8rem' }}>
             Market Closed
           </span>
           {getWeekDates(weekStart).map(date => {
@@ -256,6 +268,40 @@ export default function Dashboard() {
                   disabled={status === 'approved'}
                   onChange={() => {
                     setClosureDays(prev =>
+                      prev.includes(date) ? prev.filter(d => d !== date) : [...prev, date]
+                    );
+                  }}
+                />
+                {getDayLabel(date)}
+              </label>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', minWidth: '8rem' }}>
+            Early Close
+          </span>
+          {getWeekDates(weekStart).map(date => {
+            // Closed wins over Early Close: a day already marked Closed can't
+            // also be Early Close. We disable the box and visually drop it.
+            const isClosed = closureDays.includes(date);
+            const checked = !isClosed && earlyCloseDays.includes(date);
+            const disabled = status === 'approved' || isClosed;
+            return (
+              <label key={date} style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                fontSize: '0.85rem', cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.45 : 1,
+                padding: '0.3rem 0.5rem', borderRadius: '4px',
+                background: checked ? '#fef3c7' : 'transparent',
+                border: checked ? '1px solid #fcd34d' : '1px solid transparent',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={() => {
+                    setEarlyCloseDays(prev =>
                       prev.includes(date) ? prev.filter(d => d !== date) : [...prev, date]
                     );
                   }}

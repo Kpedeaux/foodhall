@@ -41,7 +41,7 @@ async function parallelMap(items, concurrency, task) {
  * Main orchestrator: pull Square data for a week, calculate transfers, store in DB.
  * Returns the weekly_period id.
  */
-export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenWeek, userId, closureDays = []) {
+export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenWeek, userId, closureDays = [], earlyCloseDays = []) {
   const weekDates = getWeekDates(weekStartStr);
   const weekEnd = weekDates[6];
 
@@ -202,7 +202,11 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
 
     for (const date of weekDates) {
       const day = dayData[date];
+      // Closed wins over Early Close if both are set for the same day.
+      // Early-close days take percentage only (no daily minimum), but they
+      // count as full active days for WEEKLY-plan weekly-minimum proration.
       const isClosure = closureDays.includes(date);
+      const isEarlyClose = !isClosure && earlyCloseDays.includes(date);
       if (isClosure) closureDayCount++;
 
       day.dineInSales = round2(day.dineInSales);
@@ -212,12 +216,14 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
       day.cashCollected = round2(day.cashCollected);
       day.tips = round2(day.tips);
       day.isClosure = isClosure;
+      day.isEarlyClose = isEarlyClose;
 
       const percentageFee = day.totalSales * vendor.percentage_rate;
 
       if (vendor.plan_type === 'STANDARD') {
         day.marketFeeCalc = round2(percentageFee);
-        if (isClosure) {
+        if (isClosure || isEarlyClose) {
+          // Both closure and early-close skip the daily minimum.
           day.marketFeeApplied = round2(percentageFee);
         } else {
           day.marketFeeApplied = round2(Math.max(vendor.daily_base_rent, percentageFee));
@@ -328,14 +334,18 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
         UPDATE weekly_periods
            SET is_linen_week = ${isLinenWeek},
                closure_days = ${sql.json(closureDays)},
+               early_close_days = ${sql.json(earlyCloseDays)},
                calculated_at = now(),
                week_end = ${weekEnd}
          WHERE id = ${wpId}
       `;
     } else {
       const [ins] = await sql`
-        INSERT INTO weekly_periods (market_id, week_start, week_end, is_linen_week, closure_days, calculated_at)
-        VALUES (${marketId}, ${weekStartStr}, ${weekEnd}, ${isLinenWeek}, ${sql.json(closureDays)}, now())
+        INSERT INTO weekly_periods
+          (market_id, week_start, week_end, is_linen_week, closure_days, early_close_days, calculated_at)
+        VALUES
+          (${marketId}, ${weekStartStr}, ${weekEnd}, ${isLinenWeek},
+           ${sql.json(closureDays)}, ${sql.json(earlyCloseDays)}, now())
         RETURNING id
       `;
       wpId = ins.id;
@@ -388,7 +398,11 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
   });
 
   await auditLog(marketId, userId, 'calculate_week', 'weekly_period', weekPeriodId, {
-    week_start: weekStartStr, is_linen_week: isLinenWeek, closure_days: closureDays, vendor_count: vendors.length
+    week_start: weekStartStr,
+    is_linen_week: isLinenWeek,
+    closure_days: closureDays,
+    early_close_days: earlyCloseDays,
+    vendor_count: vendors.length,
   });
 
   return { weekPeriodId, weekStart: weekStartStr, weekEnd, vendorCount: vendors.length };
