@@ -18,6 +18,25 @@ import {
 
 const round2 = (v) => Math.round(v * 100) / 100;
 
+// Run `task` over each item in `items` with at most `concurrency` running at
+// once. Preserves input order in the returned array. Used to fan out Square
+// API calls across vendors without exhausting Square's rate limit (~10 rps
+// per access token) or Postgres connection pool.
+async function parallelMap(items, concurrency, task) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await task(items[i], i);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 /**
  * Main orchestrator: pull Square data for a week, calculate transfers, store in DB.
  * Returns the weekly_period id.
@@ -57,15 +76,20 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
   // ==========================================================================
   // PHASE 1 — Fetch from Square & compute. Buffered in memory only.
   // ==========================================================================
-  const prepared = [];
+  // Run vendors concurrently (capped) so the total wall-clock fits inside
+  // DO App Platform's ~60s request timeout. Within each vendor, payments
+  // and orders are independent and fetched in parallel.
+  const VENDOR_CONCURRENCY = Number(process.env.VENDOR_FETCH_CONCURRENCY || 4);
 
-  for (const vendor of vendors) {
+  const prepared = await parallelMap(vendors, VENDOR_CONCURRENCY, async (vendor) => {
     console.log(`  Fetching data for ${vendor.name}...`);
 
-    const payments = await fetchAllPayments(vendor.square_location_id, beginTime, endTime);
-    const orders = await fetchAllOrders(vendor.square_location_id, beginTime, endTime);
+    const [payments, orders] = await Promise.all([
+      fetchAllPayments(vendor.square_location_id, beginTime, endTime),
+      fetchAllOrders(vendor.square_location_id, beginTime, endTime),
+    ]);
 
-    console.log(`    → ${payments.length} payments, ${orders.length} orders`);
+    console.log(`    → ${vendor.name}: ${payments.length} payments, ${orders.length} orders`);
 
     // Initialize day buckets
     const dayData = {};
@@ -257,7 +281,7 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
     const netTransfer = round2(netTransferBeforeCarryover - priorBalanceDue);
     const balanceDue = netTransfer < 0 ? round2(Math.abs(netTransfer)) : 0;
 
-    prepared.push({
+    return {
       vendor,
       dayData,
       weekly: {
@@ -278,8 +302,8 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
         priorBalanceDue,
         balanceDue,
       },
-    });
-  }
+    };
+  });
 
   // ==========================================================================
   // PHASE 2 — Commit everything atomically.
