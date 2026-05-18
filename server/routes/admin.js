@@ -223,7 +223,7 @@ router.get('/weeks/:id', async (req, res, next) => {
     const grandTotals = {
       totalSales: 0, totalMarketFees: 0, totalDeliveryFees: 0,
       totalSquareFees: 0, totalCash: 0, totalTransfers: 0,
-      totalTips: 0, totalLinenCharges: 0,
+      totalTips: 0, totalLinenCharges: 0, totalServiceCharges: 0,
     };
 
     const vendorSummaries = summaries.map(s => {
@@ -235,6 +235,7 @@ router.get('/weeks/:id', async (req, res, next) => {
       grandTotals.totalTransfers += s.net_transfer;
       grandTotals.totalTips += s.tips_to_transfer;
       grandTotals.totalLinenCharges += s.linen_charge;
+      grandTotals.totalServiceCharges += s.service_charge;
 
       return {
         ...s,

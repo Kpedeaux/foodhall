@@ -356,6 +356,10 @@ export default function Dashboard() {
               <div className="label">Tips to Transfer</div>
               <div className="value positive">{fmt(weekData.grandTotals.totalTips)}</div>
             </div>
+            <div className="summary-item">
+              <div className="label">Service Charges</div>
+              <div className="value negative">{fmt(weekData.grandTotals.totalServiceCharges)}</div>
+            </div>
           </div>
 
           {/* Vendor Summary Table */}
