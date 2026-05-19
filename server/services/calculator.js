@@ -49,18 +49,42 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
   const beginTime = weekStartStr + 'T00:00:00' + offset;
   const endTime = weekEnd + 'T23:59:59' + getCentralOffset(weekEnd);
 
-  // Get vendors active during this week: not excluded, has Square mapping,
-  // and either never departed or departed after the week started.
+  // Get vendors active during this week, joined with the plan terms effective
+  // for the week. A vendor must:
+  //   - belong to this market
+  //   - not be excluded
+  //   - have a Square location mapping
+  //   - not have departed before the week started
+  //   - not have started after the week ended
+  //   - have at least one vendor_terms row with effective_from <= week_start
+  // The LATERAL subquery picks the latest effective_from on or before the week,
+  // so a plan change with effective_from > week_start does NOT apply to this week.
   const vendors = await sql`
-    SELECT * FROM vendors
-    WHERE market_id = ${marketId}
-      AND is_excluded = FALSE
-      AND square_location_id IS NOT NULL
-      AND (departed_date IS NULL OR departed_date >= ${weekStartStr})
+    SELECT
+      v.id, v.market_id, v.name, v.square_location_id,
+      v.active, v.departed_date, v.started_date, v.is_excluded,
+      ct.plan_type, ct.percentage_rate, ct.daily_base_rent,
+      ct.delivery_fee_rate, ct.service_charge_rate, ct.weekly_minimum, ct.linen_charge,
+      ct.effective_from AS terms_effective_from
+    FROM vendors v
+    LEFT JOIN LATERAL (
+      SELECT plan_type, percentage_rate, daily_base_rent, delivery_fee_rate,
+             service_charge_rate, weekly_minimum, linen_charge, effective_from
+      FROM vendor_terms
+      WHERE vendor_id = v.id AND effective_from <= ${weekStartStr}
+      ORDER BY effective_from DESC
+      LIMIT 1
+    ) ct ON TRUE
+    WHERE v.market_id = ${marketId}
+      AND v.is_excluded = FALSE
+      AND v.square_location_id IS NOT NULL
+      AND (v.departed_date IS NULL OR v.departed_date >= ${weekStartStr})
+      AND (v.started_date IS NULL OR v.started_date <= ${weekEnd})
+      AND ct.plan_type IS NOT NULL
   `;
 
   if (vendors.length === 0) {
-    throw new Error('No active vendors with Square location mappings found');
+    throw new Error('No active vendors with Square location mappings + effective plan terms found for this week');
   }
 
   // Look up the existing weekly period (read only). If it's approved,

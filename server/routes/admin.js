@@ -44,8 +44,30 @@ router.get('/square/locations', async (req, res, next) => {
 
 router.get('/vendors', async (req, res, next) => {
   try {
+    // Join the currently-effective terms (latest effective_from <= today).
+    // COALESCE falls back to the vendor row's legacy columns if a vendor has
+    // no vendor_terms row yet (shouldn't happen after migration, but defensive).
     const vendors = await sql`
-      SELECT * FROM vendors WHERE market_id = ${req.user.market_id} ORDER BY name
+      SELECT
+        v.id, v.market_id, v.name, v.square_location_id,
+        v.active, v.started_date, v.departed_date, v.is_excluded,
+        v.created_at, v.updated_at,
+        COALESCE(ct.plan_type,           v.plan_type)           AS plan_type,
+        COALESCE(ct.percentage_rate,     v.percentage_rate)     AS percentage_rate,
+        COALESCE(ct.daily_base_rent,     v.daily_base_rent)     AS daily_base_rent,
+        COALESCE(ct.delivery_fee_rate,   v.delivery_fee_rate)   AS delivery_fee_rate,
+        COALESCE(ct.service_charge_rate, v.service_charge_rate) AS service_charge_rate,
+        COALESCE(ct.weekly_minimum,      v.weekly_minimum)      AS weekly_minimum,
+        COALESCE(ct.linen_charge,        v.linen_charge)        AS linen_charge,
+        ct.effective_from AS current_terms_effective_from
+      FROM vendors v
+      LEFT JOIN LATERAL (
+        SELECT * FROM vendor_terms
+        WHERE vendor_id = v.id AND effective_from <= CURRENT_DATE
+        ORDER BY effective_from DESC LIMIT 1
+      ) ct ON TRUE
+      WHERE v.market_id = ${req.user.market_id}
+      ORDER BY v.name
     `;
 
     let unconfigured = [];
@@ -86,23 +108,45 @@ router.post('/vendors', async (req, res, next) => {
       if (isExcludedBool === null) return res.status(400).json({ error: 'is_excluded must be a boolean' });
     }
 
-    const [result] = await sql`
-      INSERT INTO vendors (
-        market_id, name, square_location_id, plan_type, percentage_rate, daily_base_rent,
-        delivery_fee_rate, service_charge_rate, weekly_minimum, linen_charge,
-        active, departed_date, is_excluded
-      ) VALUES (
-        ${req.user.market_id}, ${name}, ${square_location_id || null},
-        ${plan_type || 'STANDARD'}, ${percentage_rate ?? 0.30}, ${daily_base_rent ?? 0},
-        ${delivery_fee_rate ?? 0.105}, ${service_charge_rate ?? 0.02},
-        ${weekly_minimum ?? 0}, ${linen_charge ?? 0},
-        ${activeBool}, ${departed_date || null}, ${isExcludedBool}
-      )
-      RETURNING id
-    `;
+    // Initial vendor_terms effective_from defaults to started_date (or today
+    // if no started_date provided). This guarantees the vendor has at least
+    // one effective plan row from day one.
+    const startedDate = req.body.started_date || null;
+    const effectiveFrom = startedDate || new Date().toISOString().slice(0, 10);
 
-    await auditLog(req.user.market_id, req.user.id, 'create_vendor', 'vendor', result.id, req.body);
-    res.json({ id: result.id });
+    const newId = await sql.begin(async (sql) => {
+      const [v] = await sql`
+        INSERT INTO vendors (
+          market_id, name, square_location_id, plan_type, percentage_rate, daily_base_rent,
+          delivery_fee_rate, service_charge_rate, weekly_minimum, linen_charge,
+          active, started_date, departed_date, is_excluded
+        ) VALUES (
+          ${req.user.market_id}, ${name}, ${square_location_id || null},
+          ${plan_type || 'STANDARD'}, ${percentage_rate ?? 0.30}, ${daily_base_rent ?? 0},
+          ${delivery_fee_rate ?? 0.105}, ${service_charge_rate ?? 0.02},
+          ${weekly_minimum ?? 0}, ${linen_charge ?? 0},
+          ${activeBool}, ${startedDate}, ${departed_date || null}, ${isExcludedBool}
+        )
+        RETURNING id
+      `;
+
+      await sql`
+        INSERT INTO vendor_terms (
+          vendor_id, effective_from, plan_type, percentage_rate, daily_base_rent,
+          delivery_fee_rate, service_charge_rate, weekly_minimum, linen_charge, created_by
+        ) VALUES (
+          ${v.id}, ${effectiveFrom},
+          ${plan_type || 'STANDARD'}, ${percentage_rate ?? 0.30}, ${daily_base_rent ?? 0},
+          ${delivery_fee_rate ?? 0.105}, ${service_charge_rate ?? 0.02},
+          ${weekly_minimum ?? 0}, ${linen_charge ?? 0}, ${req.user.id}
+        )
+      `;
+
+      return v.id;
+    });
+
+    await auditLog(req.user.market_id, req.user.id, 'create_vendor', 'vendor', newId, req.body);
+    res.json({ id: newId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -115,13 +159,13 @@ router.put('/vendors/:id', async (req, res, next) => {
     `;
     if (!vendor) return res.status(404).json({ error: 'Vendor not found' });
 
-    const {
-      name, square_location_id, plan_type, percentage_rate, daily_base_rent,
-      delivery_fee_rate, service_charge_rate, weekly_minimum, linen_charge,
-      active, departed_date, is_excluded
-    } = req.body;
+    // Plan/economic fields are NOT editable here anymore — they live in
+    // vendor_terms with effective dates. Changes go through
+    // POST /vendors/:id/plan-changes. The body's plan fields are silently
+    // ignored to keep legacy clients from accidentally rewriting the legacy
+    // columns out of sync with vendor_terms.
+    const { name, square_location_id, active, started_date, departed_date, is_excluded } = req.body;
 
-    // Coerce boolean inputs. undefined/null → leave unchanged.
     let nextActive = vendor.active;
     if (active !== undefined && active !== null) {
       const b = coerceBool(active);
@@ -139,14 +183,8 @@ router.put('/vendors/:id', async (req, res, next) => {
       UPDATE vendors SET
         name = ${name ?? vendor.name},
         square_location_id = ${square_location_id ?? vendor.square_location_id},
-        plan_type = ${plan_type ?? vendor.plan_type},
-        percentage_rate = ${percentage_rate ?? vendor.percentage_rate},
-        daily_base_rent = ${daily_base_rent ?? vendor.daily_base_rent},
-        delivery_fee_rate = ${delivery_fee_rate ?? vendor.delivery_fee_rate},
-        service_charge_rate = ${service_charge_rate ?? vendor.service_charge_rate},
-        weekly_minimum = ${weekly_minimum ?? vendor.weekly_minimum},
-        linen_charge = ${linen_charge ?? vendor.linen_charge},
         active = ${nextActive},
+        started_date = ${started_date !== undefined ? (started_date || null) : vendor.started_date},
         departed_date = ${departed_date !== undefined ? (departed_date || null) : vendor.departed_date},
         is_excluded = ${nextIsExcluded},
         updated_at = now()
@@ -158,6 +196,107 @@ router.put('/vendors/:id', async (req, res, next) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// ============================================================
+// Vendor Plan History (date-versioned terms)
+// ============================================================
+// Each vendor has one or more vendor_terms rows. The plan effective for a
+// given week is the row with the latest effective_from <= week_start. Adding
+// a new entry never changes already-approved weeks, but draft weeks pick up
+// the change on next recalc.
+
+router.get('/vendors/:id/plan-history', async (req, res, next) => {
+  try {
+    const [vendor] = await sql`
+      SELECT id FROM vendors WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
+    `;
+    if (!vendor) return res.status(404).json({ error: 'Vendor not found' });
+
+    const history = await sql`
+      SELECT vt.*, u.username AS created_by_username
+        FROM vendor_terms vt
+        LEFT JOIN users u ON vt.created_by = u.id
+        WHERE vt.vendor_id = ${req.params.id}
+        ORDER BY vt.effective_from DESC
+    `;
+    res.json(history);
+  } catch (err) { next(err); }
+});
+
+router.post('/vendors/:id/plan-changes', async (req, res, next) => {
+  try {
+    const [vendor] = await sql`
+      SELECT id FROM vendors WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
+    `;
+    if (!vendor) return res.status(404).json({ error: 'Vendor not found' });
+
+    const {
+      effective_from, plan_type, percentage_rate, daily_base_rent,
+      delivery_fee_rate, service_charge_rate, weekly_minimum, linen_charge,
+    } = req.body;
+
+    if (!effective_from) return res.status(400).json({ error: 'effective_from required (YYYY-MM-DD)' });
+    if (!plan_type)      return res.status(400).json({ error: 'plan_type required' });
+    if (!['FLAT', 'STANDARD', 'WEEKLY'].includes(plan_type)) {
+      return res.status(400).json({ error: 'plan_type must be FLAT, STANDARD, or WEEKLY' });
+    }
+
+    try {
+      const [row] = await sql`
+        INSERT INTO vendor_terms (
+          vendor_id, effective_from, plan_type, percentage_rate, daily_base_rent,
+          delivery_fee_rate, service_charge_rate, weekly_minimum, linen_charge, created_by
+        ) VALUES (
+          ${req.params.id}, ${effective_from},
+          ${plan_type}, ${percentage_rate ?? 0.30}, ${daily_base_rent ?? 0},
+          ${delivery_fee_rate ?? 0.105}, ${service_charge_rate ?? 0.02},
+          ${weekly_minimum ?? 0}, ${linen_charge ?? 0}, ${req.user.id}
+        )
+        RETURNING id
+      `;
+      await auditLog(req.user.market_id, req.user.id, 'add_plan_change', 'vendor_terms', row.id, {
+        vendor_id: Number(req.params.id), effective_from, plan_type, percentage_rate, daily_base_rent,
+      });
+      res.json({ id: row.id });
+    } catch (err) {
+      if (err.code === '23505') {
+        return res.status(400).json({
+          error: 'A plan entry already exists for this effective date on this vendor. Delete it first or pick a different date.',
+        });
+      }
+      throw err;
+    }
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/vendors/:id/plan-changes/:planId', async (req, res, next) => {
+  try {
+    const [row] = await sql`
+      SELECT vt.id, vt.effective_from
+        FROM vendor_terms vt
+        JOIN vendors v ON vt.vendor_id = v.id
+        WHERE vt.id = ${req.params.planId}
+          AND vt.vendor_id = ${req.params.id}
+          AND v.market_id = ${req.user.market_id}
+    `;
+    if (!row) return res.status(404).json({ error: 'Plan entry not found' });
+
+    // Refuse to delete the only remaining entry; would leave the vendor with
+    // no effective terms and the calculator would silently exclude them.
+    const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM vendor_terms WHERE vendor_id = ${req.params.id}`;
+    if (count <= 1) {
+      return res.status(400).json({ error: 'Cannot delete the only plan entry. Add a new one first.' });
+    }
+
+    await sql`DELETE FROM vendor_terms WHERE id = ${req.params.planId}`;
+    await auditLog(req.user.market_id, req.user.id, 'delete_plan_change', 'vendor_terms', req.params.planId, {
+      vendor_id: Number(req.params.id), effective_from: row.effective_from,
+    });
+    res.json({ success: true });
+  } catch (err) { next(err); }
 });
 
 // ============================================================
