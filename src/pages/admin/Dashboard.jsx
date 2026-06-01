@@ -383,6 +383,7 @@ export default function Dashboard() {
                     <th className="num">Adjustments</th>
                     <th className="num">Net Transfer</th>
                     <th className="num">Balance Due</th>
+                    <th className="num">Svc Chg</th>
                     <th className="num">Tips Transfer</th>
                   </tr>
                 </thead>
@@ -406,6 +407,7 @@ export default function Dashboard() {
                         <td className={`num ${adjTotal < 0 ? 'negative' : 'positive'}`}>{adjTotal !== 0 ? fmt(adjTotal) : '—'}</td>
                         <td className={`num ${v.net_transfer < 0 ? 'negative' : 'positive'}`}><strong>{fmt(v.net_transfer)}</strong></td>
                         <td className="num">{v.balance_due > 0 ? <span className="negative">{fmt(v.balance_due)}</span> : '—'}</td>
+                        <td className="num negative">{fmt(v.service_charge)}</td>
                         <td className="num positive">{fmt(v.tips_to_transfer)}</td>
                       </tr>
                     );
@@ -423,6 +425,7 @@ export default function Dashboard() {
                     <td className="num"></td>
                     <td className={`num ${weekData.grandTotals.totalTransfers < 0 ? 'negative' : 'positive'}`}><strong>{fmt(weekData.grandTotals.totalTransfers)}</strong></td>
                     <td className="num"></td>
+                    <td className="num negative"><strong>{fmt(weekData.grandTotals.totalServiceCharges)}</strong></td>
                     <td className="num positive">{fmt(weekData.grandTotals.totalTips)}</td>
                   </tr>
                 </tfoot>
