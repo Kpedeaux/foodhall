@@ -201,6 +201,24 @@ export default function Dashboard() {
     }
   };
 
+  // Toggle whether a vendor's tips are included in the Dashboard "Tips to
+  // Transfer" grand total. Persisted on the vendor row (vendors.exclude_from_tip_total),
+  // so the same setting applies for every admin viewing any week of this market
+  // until someone toggles it back. Does NOT affect the Excel export, vendor
+  // totals, or any other KPI.
+  const handleToggleTipExclusion = async (vendorId, currentlyExcluded) => {
+    const res = await apiFetch(`/api/admin/vendors/${vendorId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ exclude_from_tip_total: !currentlyExcluded }),
+    });
+    if (res.ok) {
+      // Refresh the current week so the Tips KPI + per-row state reflect the change.
+      await loadWeekData(weekStart);
+    } else {
+      alert('Failed to update tip-total inclusion. Try again.');
+    }
+  };
+
   const status = weekData?.week?.status;
 
   return (
@@ -355,6 +373,11 @@ export default function Dashboard() {
             <div className="summary-item">
               <div className="label">Tips to Transfer</div>
               <div className="value positive">{fmt(weekData.grandTotals.totalTips)}</div>
+              {(weekData.vendors || []).some(v => v.exclude_from_tip_total) && (
+                <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                  Excluding: {weekData.vendors.filter(v => v.exclude_from_tip_total).map(v => v.vendor_name).join(', ')}
+                </div>
+              )}
             </div>
             <div className="summary-item">
               <div className="label">Service Charges</div>
@@ -372,6 +395,7 @@ export default function Dashboard() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th title="Include this vendor in the Tips to Transfer grand total above">Inc. Tips</th>
                     <th>Vendor</th>
                     <th>Plan</th>
                     <th className="num">Total Sales</th>
@@ -395,6 +419,19 @@ export default function Dashboard() {
                         style={{ cursor: 'pointer' }}
                         onClick={() => navigate(`/admin/weeks/${weekData.week.id}/vendor/${v.vendor_id}`)}
                       >
+                        <td
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ textAlign: 'center' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!v.exclude_from_tip_total}
+                            onChange={() => handleToggleTipExclusion(v.vendor_id, !!v.exclude_from_tip_total)}
+                            title={v.exclude_from_tip_total
+                              ? `Include ${v.vendor_name} in the Tips to Transfer grand total`
+                              : `Exclude ${v.vendor_name} from the Tips to Transfer grand total`}
+                          />
+                        </td>
                         <td><strong>{v.vendor_name}</strong></td>
                         <td><span className="text-sm text-muted">{v.plan_type}</span></td>
                         <td className="num">{fmt(v.total_sales)}</td>
@@ -413,7 +450,7 @@ export default function Dashboard() {
                 </tbody>
                 <tfoot>
                   <tr>
-                    <td colSpan={2}><strong>TOTALS</strong></td>
+                    <td colSpan={3}><strong>TOTALS</strong></td>
                     <td className="num">{fmt(weekData.grandTotals.totalSales)}</td>
                     <td className="num negative">{fmt(weekData.grandTotals.totalMarketFees)}</td>
                     <td className="num negative">{fmt(weekData.grandTotals.totalSquareFees)}</td>
