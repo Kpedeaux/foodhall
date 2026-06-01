@@ -164,7 +164,7 @@ router.put('/vendors/:id', async (req, res, next) => {
     // POST /vendors/:id/plan-changes. The body's plan fields are silently
     // ignored to keep legacy clients from accidentally rewriting the legacy
     // columns out of sync with vendor_terms.
-    const { name, square_location_id, active, started_date, departed_date, is_excluded, exclude_from_tip_total } = req.body;
+    const { name, square_location_id, active, started_date, departed_date, is_excluded } = req.body;
 
     let nextActive = vendor.active;
     if (active !== undefined && active !== null) {
@@ -178,12 +178,6 @@ router.put('/vendors/:id', async (req, res, next) => {
       if (b === null) return res.status(400).json({ error: 'is_excluded must be a boolean' });
       nextIsExcluded = b;
     }
-    let nextExcludeFromTipTotal = vendor.exclude_from_tip_total;
-    if (exclude_from_tip_total !== undefined && exclude_from_tip_total !== null) {
-      const b = coerceBool(exclude_from_tip_total);
-      if (b === null) return res.status(400).json({ error: 'exclude_from_tip_total must be a boolean' });
-      nextExcludeFromTipTotal = b;
-    }
 
     await sql`
       UPDATE vendors SET
@@ -193,7 +187,6 @@ router.put('/vendors/:id', async (req, res, next) => {
         started_date = ${started_date !== undefined ? (started_date || null) : vendor.started_date},
         departed_date = ${departed_date !== undefined ? (departed_date || null) : vendor.departed_date},
         is_excluded = ${nextIsExcluded},
-        exclude_from_tip_total = ${nextExcludeFromTipTotal},
         updated_at = now()
       WHERE id = ${req.params.id} AND market_id = ${req.user.market_id}
     `;
@@ -331,8 +324,7 @@ router.get('/weeks/:id', async (req, res, next) => {
     if (!week) return res.status(404).json({ error: 'Week not found' });
 
     const summaries = await sql`
-      SELECT ws.*, v.name AS vendor_name, v.plan_type, v.percentage_rate, v.daily_base_rent,
-             v.exclude_from_tip_total
+      SELECT ws.*, v.name AS vendor_name, v.plan_type, v.percentage_rate, v.daily_base_rent
       FROM weekly_summaries ws
       JOIN vendors v ON ws.vendor_id = v.id
       WHERE ws.weekly_period_id = ${week.id}
@@ -380,9 +372,7 @@ router.get('/weeks/:id', async (req, res, next) => {
       grandTotals.totalSquareFees += s.total_square_fees;
       grandTotals.totalCash += s.total_cash;
       grandTotals.totalTransfers += s.net_transfer;
-      if (!s.exclude_from_tip_total) {
-        grandTotals.totalTips += s.tips_to_transfer;
-      }
+      grandTotals.totalTips += s.tips_to_transfer;
       grandTotals.totalLinenCharges += s.linen_charge;
       grandTotals.totalServiceCharges += s.service_charge;
 

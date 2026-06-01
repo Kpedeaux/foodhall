@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS vendors (
   started_date        DATE,
   departed_date       DATE,
   is_excluded         BOOLEAN NOT NULL DEFAULT FALSE,
-  exclude_from_tip_total BOOLEAN NOT NULL DEFAULT FALSE,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(market_id, square_location_id)
@@ -207,23 +206,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 INSERT INTO schema_migrations (name) VALUES
   ('2026_04_flip_adjustment_sign_convention')
 ON CONFLICT (name) DO NOTHING;
-
--- ── Additive column migration (idempotent) ──────────────────
--- New columns added after the original schema-cut go here as ALTER TABLE
--- statements guarded by an information_schema lookup so they no-op on
--- databases that already have the column. CREATE TABLE above is the
--- ground truth for fresh installs; this block keeps existing installs
--- in sync.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'vendors' AND column_name = 'exclude_from_tip_total'
-  ) THEN
-    ALTER TABLE vendors
-      ADD COLUMN exclude_from_tip_total BOOLEAN NOT NULL DEFAULT FALSE;
-  END IF;
-END $$;
 
 -- ── Grants for the application service user ──────────────────
 -- The schema is created by an elevated user (doadmin during one-time
