@@ -53,18 +53,21 @@ export default function UserManagement() {
   };
 
   const handleResetPassword = async () => {
-    if (!showResetModal || resetPassword.length < 6) return;
+    if (!showResetModal || resetPassword.length < 10) return;
     setSaving(true);
+    setError('');
     try {
       const res = await apiFetch(`/api/admin/users/${showResetModal}/reset-password`, {
         method: 'POST',
         body: JSON.stringify({ newPassword: resetPassword }),
       });
-      if (res.ok) {
-        setShowResetModal(null);
-        setResetPassword('');
-        await loadData();
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Reset failed (HTTP ${res.status}).`);
+      setShowResetModal(null);
+      setResetPassword('');
+      await loadData();
+    } catch (err) {
+      setError(err.message || 'Password reset failed — the old password is still active.');
     } finally {
       setSaving(false);
     }
@@ -111,8 +114,9 @@ export default function UserManagement() {
                 <input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
               </div>
               <div className="form-group">
-                <label>Password (min 6 characters)</label>
+                <label>Password</label>
                 <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                <span className="text-sm text-muted">Min 10 characters, with an uppercase letter, lowercase letter, number, and symbol.</span>
               </div>
               <div className="form-group">
                 <label>Email (optional)</label>
@@ -154,15 +158,17 @@ export default function UserManagement() {
               <button className="btn btn-ghost" style={{ color: 'var(--color-text)' }} onClick={() => setShowResetModal(null)}>✕</button>
             </div>
             <div className="modal-body">
+              {error && <div className="alert alert-error">{error}</div>}
               <div className="form-group">
-                <label>New Password (min 6 characters)</label>
+                <label>New Password</label>
                 <input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+                <span className="text-sm text-muted">Min 10 characters, with an uppercase letter, lowercase letter, number, and symbol.</span>
               </div>
               <p className="text-sm text-muted">User will be required to change their password on next login.</p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setShowResetModal(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleResetPassword} disabled={saving || resetPassword.length < 6}>
+              <button className="btn btn-primary" onClick={handleResetPassword} disabled={saving || resetPassword.length < 10}>
                 Reset Password
               </button>
             </div>
@@ -195,7 +201,7 @@ export default function UserManagement() {
                 <td className="text-muted">{u.email || '—'}</td>
                 <td>{u.active ? 'Active' : 'Inactive'}{u.must_change_password ? ' (pwd reset)' : ''}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
-                  <button className="btn btn-outline btn-sm" onClick={() => setShowResetModal(u.id)} style={{ marginRight: '0.25rem' }}>Reset Pwd</button>
+                  <button className="btn btn-outline btn-sm" onClick={() => { setShowResetModal(u.id); setResetPassword(''); setError(''); }} style={{ marginRight: '0.25rem' }}>Reset Pwd</button>
                   <button className="btn btn-outline btn-sm" onClick={() => toggleActive(u)}>
                     {u.active ? 'Deactivate' : 'Activate'}
                   </button>

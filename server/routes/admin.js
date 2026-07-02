@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requirePasswordChanged } from '../middleware/auth.js';
 import { sql, auditLog } from '../db/database.js';
 import bcrypt from 'bcryptjs';
 import { listLocations } from '../services/square.js';
@@ -7,7 +7,7 @@ import { calculateTransfersForWeek } from '../services/calculator.js';
 import { validatePassword } from '../middleware/passwordPolicy.js';
 
 const router = Router();
-router.use(authenticate, requireAdmin);
+router.use(authenticate, requirePasswordChanged, requireAdmin);
 
 // ── Input coercion ──────────────────────────────
 // Postgres BOOLEAN columns reject int4/text via the wire protocol, so any
@@ -21,6 +21,45 @@ function coerceBool(v) {
     const s = v.trim().toLowerCase();
     if (s === 'true' || s === '1' || s === 't' || s === 'yes') return true;
     if (s === 'false' || s === '0' || s === 'f' || s === 'no') return false;
+  }
+  return null;
+}
+
+// ── Economic-input validation ───────────────────────────────
+// Rates are stored as fractions (0.30 = 30%), so any rate outside 0–1 is
+// almost certainly a data-entry typo — the classic case being "30" entered
+// to mean 30%, which would compute a 3000%-of-sales market fee and send a
+// vendor's payout wildly negative. Dollar amounts must be non-negative and
+// finite. Returns an error string, or null if the (present) fields are sane.
+// Fields that are undefined/null are left to their server-side defaults.
+const RATE_FIELDS = {
+  percentage_rate: 'Percentage rate',
+  delivery_fee_rate: 'Delivery fee rate',
+  service_charge_rate: 'Service charge rate',
+};
+const MONEY_FIELDS = {
+  daily_base_rent: 'Daily base rent',
+  weekly_minimum: 'Weekly minimum',
+  linen_charge: 'Linen charge',
+};
+
+function validateEconomics(body) {
+  for (const [field, label] of Object.entries(RATE_FIELDS)) {
+    const raw = body[field];
+    if (raw === undefined || raw === null || raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return `${label} must be a number.`;
+    if (n < 0 || n > 1) {
+      return `${label} must be a fraction between 0 and 1 (e.g. 0.30 for 30%). Got "${raw}".`;
+    }
+  }
+  for (const [field, label] of Object.entries(MONEY_FIELDS)) {
+    const raw = body[field];
+    if (raw === undefined || raw === null || raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return `${label} must be a number.`;
+    if (n < 0) return `${label} cannot be negative. Got "${raw}".`;
+    if (n > 1_000_000) return `${label} looks too large ("${raw}"). Enter a dollar amount.`;
   }
   return null;
 }
@@ -107,6 +146,9 @@ router.post('/vendors', async (req, res, next) => {
       isExcludedBool = coerceBool(is_excluded);
       if (isExcludedBool === null) return res.status(400).json({ error: 'is_excluded must be a boolean' });
     }
+
+    const econError = validateEconomics(req.body);
+    if (econError) return res.status(400).json({ error: econError });
 
     // Initial vendor_terms effective_from defaults to started_date (or today
     // if no started_date provided). This guarantees the vendor has at least
@@ -241,6 +283,8 @@ router.post('/vendors/:id/plan-changes', async (req, res, next) => {
     if (!['FLAT', 'STANDARD', 'WEEKLY'].includes(plan_type)) {
       return res.status(400).json({ error: 'plan_type must be FLAT, STANDARD, or WEEKLY' });
     }
+    const econError = validateEconomics(req.body);
+    if (econError) return res.status(400).json({ error: econError });
 
     try {
       const [row] = await sql`
@@ -739,6 +783,24 @@ router.get('/market', async (req, res, next) => {
 router.put('/market', async (req, res, next) => {
   try {
     const { name, default_delivery_fee_rate, default_service_charge_rate } = req.body;
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Market name is required.' });
+    }
+    // These columns are NOT NULL fractions. Without this check a blanked field
+    // arrives as NaN → null and throws a raw Postgres error; a typo like "30"
+    // would silently store a 3000% default rate. Reject both here.
+    for (const [value, label] of [
+      [default_delivery_fee_rate, 'Default delivery fee rate'],
+      [default_service_charge_rate, 'Default service charge rate'],
+    ]) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0 || n > 1) {
+        return res.status(400).json({
+          error: `${label} must be a fraction between 0 and 1 (e.g. 0.105 for 10.5%).`,
+        });
+      }
+    }
 
     await sql`
       UPDATE markets SET

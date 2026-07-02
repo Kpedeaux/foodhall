@@ -18,6 +18,17 @@ if (!JWT_SECRET) {
   // Development only: generate a random per-run secret (tokens won't survive restarts)
   JWT_SECRET = crypto.randomBytes(64).toString('hex');
   console.warn('⚠️  No JWT_SECRET set — using random secret (dev mode only). Tokens reset on restart.');
+} else if (JWT_SECRET.length < 48) {
+  // A secret IS set but is short/low-entropy. The recommended value is 64
+  // random bytes as hex (128 chars). A short, human-typed passphrase is
+  // brute-forcible offline, which would let an attacker forge admin/super
+  // tokens without ever touching the login endpoint. Warn loudly but do not
+  // crash — refusing to boot could lock a live deployment out of itself.
+  console.warn(
+    `⚠️  JWT_SECRET is only ${JWT_SECRET.length} characters — below the recommended strength. ` +
+    'Generate a strong one with:  node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"  ' +
+    'then set it in your production environment. (Rotating it logs everyone out; they simply re-login.)'
+  );
 }
 
 const ACCESS_TOKEN_EXPIRY = '2h';     // Short-lived access token
@@ -54,13 +65,15 @@ export async function authenticate(req, res, next) {
   }
 
   try {
-    // Real-time session invalidation: verify user is still active
-    const [user] = await sql`SELECT active FROM users WHERE id = ${decoded.id}`;
+    // Real-time session invalidation: verify user is still active. Also pull
+    // the LIVE must_change_password flag (not the token's stale copy) so the
+    // requirePasswordChanged gate below can enforce it server-side.
+    const [user] = await sql`SELECT active, must_change_password FROM users WHERE id = ${decoded.id}`;
     if (!user || !user.active) {
       return res.status(401).json({ error: 'Account deactivated' });
     }
 
-    req.user = decoded; // { id, username, role, market_id, vendor_id }
+    req.user = { ...decoded, must_change_password: !!user.must_change_password }; // { id, username, role, market_id, vendor_id, must_change_password }
     next();
   } catch (err) {
     next(err);
@@ -85,6 +98,25 @@ export function requireVendor(req, res, next) {
 export function requireSuperAdmin(req, res, next) {
   if (req.user.role !== 'super_admin') {
     return res.status(403).json({ error: 'Super Admin access required' });
+  }
+  next();
+}
+
+// ── Force-password-change gate ──────────────────────────────
+// When an admin resets a user's password, the account is left with a
+// temporary credential and must_change_password = TRUE. The React app
+// redirects such users to the change-password screen, but that guard is
+// client-side only — before this gate, the temporary password worked against
+// every API endpoint (curl/Postman) indefinitely. Mount this on the
+// privileged routers (admin/vendor/super/export) AFTER authenticate. The auth
+// router does NOT mount it, so /api/auth/change-password and /api/auth/me
+// remain reachable so the user can actually clear the flag.
+export function requirePasswordChanged(req, res, next) {
+  if (req.user && req.user.must_change_password) {
+    return res.status(403).json({
+      error: 'You must change your temporary password before using the app.',
+      code: 'PASSWORD_CHANGE_REQUIRED',
+    });
   }
   next();
 }

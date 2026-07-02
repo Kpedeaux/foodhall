@@ -115,6 +115,22 @@ export default function VendorSettings() {
 
   const handleAddPlan = async () => {
     if (!planHistoryFor) return;
+
+    // Guard against the classic "30 meaning 30%" typo. Rates are fractions
+    // (0.30 = 30%), so anything in the high band is worth a human-readable
+    // double-check before it reaches the calculator and skews a payout.
+    const rateWarnings = [];
+    const pct = Number(planForm.percentage_rate);
+    if (Number.isFinite(pct) && pct > 0.6) rateWarnings.push(`market fee = ${(pct * 100).toFixed(1)}% of sales`);
+    const del = Number(planForm.delivery_fee_rate);
+    if (Number.isFinite(del) && del > 0.5) rateWarnings.push(`delivery fee = ${(del * 100).toFixed(1)}%`);
+    const svc = Number(planForm.service_charge_rate);
+    if (Number.isFinite(svc) && svc > 0.5) rateWarnings.push(`service charge = ${(svc * 100).toFixed(1)}%`);
+    if (rateWarnings.length > 0 &&
+        !confirm(`Double-check these rates — they look unusually high:\n\n• ${rateWarnings.join('\n• ')}\n\nRates are fractions (0.30 = 30%). Save anyway?`)) {
+      return;
+    }
+
     setPlanSaving(true);
     setPlanError('');
     try {
@@ -207,28 +223,28 @@ export default function VendorSettings() {
                       </select>
                     </div>
                     <div className="form-group">
-                      <label>Percentage Rate</label>
-                      <input type="number" step="0.01" value={form.percentage_rate ?? ''} onChange={(e) => updateForm('percentage_rate', parseFloat(e.target.value))} />
+                      <label>Percentage Rate <span className="text-sm text-muted">(0.30 = 30%)</span></label>
+                      <input type="number" step="0.01" min="0" max="1" value={form.percentage_rate ?? ''} onChange={(e) => updateForm('percentage_rate', parseFloat(e.target.value))} />
                     </div>
                     <div className="form-group">
                       <label>Daily Base Rent ($)</label>
-                      <input type="number" step="1" value={form.daily_base_rent ?? ''} onChange={(e) => updateForm('daily_base_rent', parseFloat(e.target.value))} />
+                      <input type="number" step="1" min="0" value={form.daily_base_rent ?? ''} onChange={(e) => updateForm('daily_base_rent', parseFloat(e.target.value))} />
                     </div>
                     <div className="form-group">
-                      <label>Delivery Fee Rate</label>
-                      <input type="number" step="0.001" value={form.delivery_fee_rate ?? ''} onChange={(e) => updateForm('delivery_fee_rate', parseFloat(e.target.value))} />
+                      <label>Delivery Fee Rate <span className="text-sm text-muted">(0.105 = 10.5%)</span></label>
+                      <input type="number" step="0.001" min="0" max="1" value={form.delivery_fee_rate ?? ''} onChange={(e) => updateForm('delivery_fee_rate', parseFloat(e.target.value))} />
                     </div>
                     <div className="form-group">
-                      <label>Service Charge Rate</label>
-                      <input type="number" step="0.001" value={form.service_charge_rate ?? ''} onChange={(e) => updateForm('service_charge_rate', parseFloat(e.target.value))} />
+                      <label>Service Charge Rate <span className="text-sm text-muted">(0.02 = 2%)</span></label>
+                      <input type="number" step="0.001" min="0" max="1" value={form.service_charge_rate ?? ''} onChange={(e) => updateForm('service_charge_rate', parseFloat(e.target.value))} />
                     </div>
                     <div className="form-group">
                       <label>Weekly Minimum ($)</label>
-                      <input type="number" step="1" value={form.weekly_minimum ?? ''} onChange={(e) => updateForm('weekly_minimum', parseFloat(e.target.value))} />
+                      <input type="number" step="1" min="0" value={form.weekly_minimum ?? ''} onChange={(e) => updateForm('weekly_minimum', parseFloat(e.target.value))} />
                     </div>
                     <div className="form-group">
                       <label>Linen Charge ($)</label>
-                      <input type="number" step="1" value={form.linen_charge ?? ''} onChange={(e) => updateForm('linen_charge', parseFloat(e.target.value))} />
+                      <input type="number" step="1" min="0" value={form.linen_charge ?? ''} onChange={(e) => updateForm('linen_charge', parseFloat(e.target.value))} />
                     </div>
                   </div>
                 </>
@@ -423,28 +439,28 @@ export default function VendorSettings() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label>Percentage Rate</label>
-                  <input type="number" step="0.01" value={planForm.percentage_rate ?? ''} onChange={(e) => updatePlanForm('percentage_rate', parseFloat(e.target.value))} />
+                  <label>Percentage Rate <span className="text-sm text-muted">(0.30 = 30%)</span></label>
+                  <input type="number" step="0.01" min="0" max="1" value={planForm.percentage_rate ?? ''} onChange={(e) => updatePlanForm('percentage_rate', parseFloat(e.target.value))} />
                 </div>
                 <div className="form-group">
                   <label>Daily Base Rent ($)</label>
-                  <input type="number" step="1" value={planForm.daily_base_rent ?? ''} onChange={(e) => updatePlanForm('daily_base_rent', parseFloat(e.target.value))} />
+                  <input type="number" step="1" min="0" value={planForm.daily_base_rent ?? ''} onChange={(e) => updatePlanForm('daily_base_rent', parseFloat(e.target.value))} />
                 </div>
                 <div className="form-group">
-                  <label>Delivery Fee Rate</label>
-                  <input type="number" step="0.001" value={planForm.delivery_fee_rate ?? ''} onChange={(e) => updatePlanForm('delivery_fee_rate', parseFloat(e.target.value))} />
+                  <label>Delivery Fee Rate <span className="text-sm text-muted">(0.105 = 10.5%)</span></label>
+                  <input type="number" step="0.001" min="0" max="1" value={planForm.delivery_fee_rate ?? ''} onChange={(e) => updatePlanForm('delivery_fee_rate', parseFloat(e.target.value))} />
                 </div>
                 <div className="form-group">
-                  <label>Service Charge Rate</label>
-                  <input type="number" step="0.001" value={planForm.service_charge_rate ?? ''} onChange={(e) => updatePlanForm('service_charge_rate', parseFloat(e.target.value))} />
+                  <label>Service Charge Rate <span className="text-sm text-muted">(0.02 = 2%)</span></label>
+                  <input type="number" step="0.001" min="0" max="1" value={planForm.service_charge_rate ?? ''} onChange={(e) => updatePlanForm('service_charge_rate', parseFloat(e.target.value))} />
                 </div>
                 <div className="form-group">
                   <label>Weekly Minimum ($)</label>
-                  <input type="number" step="1" value={planForm.weekly_minimum ?? ''} onChange={(e) => updatePlanForm('weekly_minimum', parseFloat(e.target.value))} />
+                  <input type="number" step="1" min="0" value={planForm.weekly_minimum ?? ''} onChange={(e) => updatePlanForm('weekly_minimum', parseFloat(e.target.value))} />
                 </div>
                 <div className="form-group">
                   <label>Linen Charge ($)</label>
-                  <input type="number" step="1" value={planForm.linen_charge ?? ''} onChange={(e) => updatePlanForm('linen_charge', parseFloat(e.target.value))} />
+                  <input type="number" step="1" min="0" value={planForm.linen_charge ?? ''} onChange={(e) => updatePlanForm('linen_charge', parseFloat(e.target.value))} />
                 </div>
               </div>
             </div>

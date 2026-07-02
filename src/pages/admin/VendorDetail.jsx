@@ -27,6 +27,7 @@ export default function VendorDetail() {
   const [adjAmount, setAdjAmount] = useState('');
   const [adjDesc, setAdjDesc] = useState('');
   const [adjLoading, setAdjLoading] = useState(false);
+  const [adjError, setAdjError] = useState('');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -45,29 +46,44 @@ export default function VendorDetail() {
     e.preventDefault();
     if (!adjAmount || !data?.vendor) return;
     setAdjLoading(true);
-
-    const res = await apiFetch('/api/admin/adjustments', {
-      method: 'POST',
-      body: JSON.stringify({
-        weekly_summary_id: data.vendor.id,
-        type: adjType,
-        amount: parseFloat(adjAmount),
-        description: adjDesc,
-      }),
-    });
-
-    if (res.ok) {
+    setAdjError('');
+    try {
+      const res = await apiFetch('/api/admin/adjustments', {
+        method: 'POST',
+        body: JSON.stringify({
+          weekly_summary_id: data.vendor.id,
+          type: adjType,
+          amount: parseFloat(adjAmount),
+          description: adjDesc,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Could not add adjustment (HTTP ${res.status}).`);
+      }
       setAdjAmount('');
       setAdjDesc('');
       await loadData();
+    } catch (err) {
+      setAdjError(err.message || 'Could not add adjustment — it was not saved.');
+    } finally {
+      setAdjLoading(false);
     }
-    setAdjLoading(false);
   };
 
   const handleDeleteAdj = async (adjId) => {
     if (!confirm('Delete this adjustment?')) return;
-    const res = await apiFetch(`/api/admin/adjustments/${adjId}`, { method: 'DELETE' });
-    if (res.ok) await loadData();
+    setAdjError('');
+    try {
+      const res = await apiFetch(`/api/admin/adjustments/${adjId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Could not delete adjustment (HTTP ${res.status}).`);
+      }
+      await loadData();
+    } catch (err) {
+      setAdjError(err.message || 'Could not delete adjustment.');
+    }
   };
 
   if (loading) return <div className="loading-spinner">Loading...</div>;
@@ -213,6 +229,7 @@ export default function VendorDetail() {
           </span>
         </div>
         <div className="card-body">
+          {adjError && <div className="alert alert-error mb-2">{adjError}</div>}
           {(vendor.adjustments || []).length > 0 ? (
             <table className="data-table mb-2">
               <thead>

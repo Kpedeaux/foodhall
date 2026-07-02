@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { authenticate, requireSuperAdmin } from '../middleware/auth.js';
+import { authenticate, requireSuperAdmin, requirePasswordChanged } from '../middleware/auth.js';
 import { sql, auditLog } from '../db/database.js';
 import { validatePassword } from '../middleware/passwordPolicy.js';
 
 const router = Router();
-router.use(authenticate, requireSuperAdmin);
+router.use(authenticate, requirePasswordChanged, requireSuperAdmin);
 
 // ============================================================
 // Markets

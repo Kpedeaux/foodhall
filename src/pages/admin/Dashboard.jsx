@@ -66,6 +66,7 @@ export default function Dashboard() {
   const [closureDays, setClosureDays] = useState([]);
   const [earlyCloseDays, setEarlyCloseDays] = useState([]);
   const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [weeks, setWeeks] = useState([]);
 
   const weekEnd = addWeeks(weekStart, 0);
@@ -77,10 +78,17 @@ export default function Dashboard() {
 
   // Load weeks list
   const loadWeeks = useCallback(async () => {
-    const res = await apiFetch('/api/admin/weeks');
-    if (res.ok) {
-      const data = await res.json();
-      setWeeks(data);
+    try {
+      const res = await apiFetch('/api/admin/weeks');
+      if (res.ok) {
+        const data = await res.json();
+        setWeeks(data);
+        setLoadError('');
+      } else {
+        setLoadError(`Couldn't load weeks from the server (HTTP ${res.status}). This is a connection problem, not empty data — do not re-pull until it's resolved.`);
+      }
+    } catch {
+      setLoadError("Couldn't reach the Food Hall server. This is a connection problem, not empty data — do not re-pull until it's resolved.");
     }
   }, [apiFetch]);
 
@@ -184,20 +192,32 @@ export default function Dashboard() {
   const handleApprove = async () => {
     if (!weekData?.week?.id) return;
     if (!confirm('Approve this week? Vendors will be able to see the data.')) return;
-
-    const res = await apiFetch(`/api/admin/weeks/${weekData.week.id}/approve`, { method: 'POST' });
-    if (res.ok) {
+    setError('');
+    try {
+      const res = await apiFetch(`/api/admin/weeks/${weekData.week.id}/approve`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Approve failed (HTTP ${res.status}).`);
+      }
       await loadWeeks();
+    } catch (err) {
+      setError(err.message || 'Approve failed — the week was NOT approved.');
     }
   };
 
   const handleUnlock = async () => {
     if (!weekData?.week?.id) return;
     if (!confirm('Unlock this week? This will allow recalculation and hide it from vendors.')) return;
-
-    const res = await apiFetch(`/api/admin/weeks/${weekData.week.id}/unlock`, { method: 'POST' });
-    if (res.ok) {
+    setError('');
+    try {
+      const res = await apiFetch(`/api/admin/weeks/${weekData.week.id}/unlock`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Unlock failed (HTTP ${res.status}).`);
+      }
       await loadWeeks();
+    } catch (err) {
+      setError(err.message || 'Unlock failed — the week is still approved.');
     }
   };
 
@@ -217,6 +237,7 @@ export default function Dashboard() {
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
+      {loadError && <div className="alert alert-error">{loadError}</div>}
 
       <div className="flex-between mb-2" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
         <div className="inline-flex gap-1">

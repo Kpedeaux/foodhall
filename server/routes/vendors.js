@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requirePasswordChanged } from '../middleware/auth.js';
 import { sql } from '../db/database.js';
 
 const router = Router();
-router.use(authenticate);
+router.use(authenticate, requirePasswordChanged);
 
 // Vendor can only access their own approved data
 

@@ -1,10 +1,10 @@
 import { Router } from 'express';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requirePasswordChanged } from '../middleware/auth.js';
 import { exportVendorAnnual, exportAllVendors } from '../services/exporter.js';
 import { sql } from '../db/database.js';
 
 const router = Router();
-router.use(authenticate, requireAdmin);
+router.use(authenticate, requirePasswordChanged, requireAdmin);
 
 // Export single vendor annual report
 router.get('/:vendorId/:year', async (req, res, next) => {

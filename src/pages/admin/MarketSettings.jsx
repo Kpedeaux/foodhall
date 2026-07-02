@@ -8,6 +8,7 @@ export default function MarketSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
   const [squareStatus, setSquareStatus] = useState(null);
 
   useEffect(() => {
@@ -38,16 +39,24 @@ export default function MarketSettings() {
   const handleSave = async () => {
     setSaving(true);
     setSuccess(false);
-    const res = await apiFetch('/api/admin/market', {
-      method: 'PUT',
-      body: JSON.stringify({
-        name: form.name,
-        default_delivery_fee_rate: parseFloat(form.default_delivery_fee_rate),
-        default_service_charge_rate: parseFloat(form.default_service_charge_rate),
-      }),
-    });
-    if (res.ok) setSuccess(true);
-    setSaving(false);
+    setError('');
+    try {
+      const res = await apiFetch('/api/admin/market', {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: form.name,
+          default_delivery_fee_rate: parseFloat(form.default_delivery_fee_rate),
+          default_service_charge_rate: parseFloat(form.default_service_charge_rate),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Save failed (HTTP ${res.status}).`);
+      setSuccess(true);
+    } catch (err) {
+      setError(err.message || 'Could not reach the server. Your changes were not saved.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (loading) return <div className="loading-spinner">Loading settings...</div>;
@@ -61,6 +70,7 @@ export default function MarketSettings() {
           <div className="card-header"><h2>Market Configuration</h2></div>
           <div className="card-body">
             {success && <div className="alert alert-success">Settings saved.</div>}
+            {error && <div className="alert alert-error">{error}</div>}
 
             <div className="form-group">
               <label>Market Name</label>
@@ -68,12 +78,12 @@ export default function MarketSettings() {
             </div>
             <div className="form-group">
               <label>Default Delivery Fee Rate</label>
-              <input type="number" step="0.001" value={form.default_delivery_fee_rate ?? ''} onChange={(e) => setForm({ ...form, default_delivery_fee_rate: e.target.value })} />
+              <input type="number" step="0.001" min="0" max="1" value={form.default_delivery_fee_rate ?? ''} onChange={(e) => setForm({ ...form, default_delivery_fee_rate: e.target.value })} />
               <span className="text-sm text-muted">e.g., 0.105 for 10.5%</span>
             </div>
             <div className="form-group">
               <label>Default Service Charge Rate</label>
-              <input type="number" step="0.001" value={form.default_service_charge_rate ?? ''} onChange={(e) => setForm({ ...form, default_service_charge_rate: e.target.value })} />
+              <input type="number" step="0.001" min="0" max="1" value={form.default_service_charge_rate ?? ''} onChange={(e) => setForm({ ...form, default_service_charge_rate: e.target.value })} />
               <span className="text-sm text-muted">e.g., 0.02 for 2%</span>
             </div>
 

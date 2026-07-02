@@ -19,8 +19,8 @@ export default function ChangePassword() {
     setError('');
     setSuccess(false);
 
-    if (newPassword.length < 6) {
-      setError('New password must be at least 6 characters');
+    if (newPassword.length < 10) {
+      setError('New password must be at least 10 characters, with an uppercase letter, lowercase letter, number, and symbol.');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -81,9 +81,10 @@ export default function ChangePassword() {
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              minLength={6}
+              minLength={10}
               required
             />
+            <span className="text-sm text-muted">Min 10 characters, with an uppercase letter, lowercase letter, number, and symbol.</span>
           </div>
           <div className="form-group">
             <label htmlFor="confirmPassword">Confirm New Password</label>
@@ -92,7 +93,7 @@ export default function ChangePassword() {
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              minLength={6}
+              minLength={10}
               required
             />
           </div>
