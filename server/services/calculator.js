@@ -137,9 +137,18 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
     // -------------------------------------------------------
     // STEP 1: ORDERS — sales, delivery detection, tips
     // net_amounts already accounts for returns/refunds/discounts
+    //
+    // Orders are COMPLETED-only and bucketed by closed_at (close time =
+    // payment completion), matching how Square's sales reports assign
+    // sales to days. Bucketing by created_at instead caused two audited
+    // discrepancies vs Square: never-paid OPEN register tickets counted
+    // as sales, and invoices credited to their creation date rather than
+    // the date the customer paid.
     // -------------------------------------------------------
     for (const order of orders) {
-      if (order.state === 'CANCELED' || order.state === 'DRAFT') continue;
+      // fetchAllOrders already filters to COMPLETED; guard kept so a fetch
+      // change can never silently reintroduce OPEN/CANCELED orders here.
+      if (order.state !== 'COMPLETED') continue;
 
       // Handle return orders: skip CUSTOM_AMOUNT refunds — Square Dashboard
       // does NOT subtract these from Net Sales. ITEM returns ARE subtracted.
@@ -151,7 +160,7 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
         if (isCustomAmountRefund) continue;
       }
 
-      const localDate = getLocalDate(order.created_at);
+      const localDate = getLocalDate(order.closed_at || order.created_at);
       if (!dayData[localDate]) continue;
 
       const day = dayData[localDate];

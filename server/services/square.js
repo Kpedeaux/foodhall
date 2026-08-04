@@ -151,11 +151,18 @@ export async function fetchAllOrders(locationId, startAt, endAt) {
     const body = {
       location_ids: [locationId],
       query: {
+        // COMPLETED orders windowed by closed_at (close time = payment
+        // completion for POS sales, payment date for Square Invoices).
+        // This matches how Square's own sales reports assign sales to days,
+        // and it excludes OPEN register tickets that were never paid.
+        // Square requires sort_field to match the date_time_filter field.
         filter: {
+          state_filter: { states: ['COMPLETED'] },
           date_time_filter: {
-            created_at: { start_at: startAt, end_at: endAt }
+            closed_at: { start_at: startAt, end_at: endAt }
           }
-        }
+        },
+        sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' }
       }
     };
     if (cursor) body.cursor = cursor;
