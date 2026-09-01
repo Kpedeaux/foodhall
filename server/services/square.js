@@ -55,6 +55,12 @@ function toLocalDateStr(d) {
     String(d.getDate()).padStart(2, '0');
 }
 
+export function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return toLocalDateStr(d);
+}
+
 export function getWeekDates(weekStartStr) {
   const dates = [];
   const start = new Date(weekStartStr + 'T12:00:00');
@@ -69,27 +75,51 @@ export function getWeekDates(weekStartStr) {
 // ============================================================
 // Delivery Detection
 // ============================================================
+// Classification is by ORDER SOURCE ONLY, mirroring the source filter on the
+// Dashboard "Delivery Net Sales (Transfer)" custom report the office reconciles
+// against. Fulfillment type is deliberately NOT consulted: a Square Online or
+// POS order fulfilled by delivery still counts as dine-in there, and orders
+// with no source at all are Register sales (dine-in).
 
-const DELIVERY_SOURCES = [
+// Source names exactly as they appear in that report's filter list.
+const DELIVERY_SOURCES_EXACT = new Set([
+  'postmates delivery', 'postmates pickup', 'uber eats delivery',
+  'uber eats pickup', 'sauce', 'caviar', 'doordash', 'doordash - caviar',
+  'doordash - storefront', 'uber eats', 'uber eats - postmates',
+]);
+
+// Fallback substring match so a renamed or newly added platform source still
+// lands in the delivery bucket instead of silently inflating dine-in.
+const DELIVERY_SOURCES_FUZZY = [
   'doordash', 'uber eats', 'ubereats', 'grubhub', 'postmates',
   'caviar', 'seamless', 'delivery.com', 'chownow', 'toast',
   'ritual', 'slice', 'olo', 'sauce'
 ];
 
 export function isDeliveryOrder(order) {
-  if (order.fulfillments) {
-    for (const f of order.fulfillments) {
-      if (f.type === 'DELIVERY') return true;
+  const src = (order.source && order.source.name ? order.source.name : '').toLowerCase();
+  if (!src) return false;
+  if (DELIVERY_SOURCES_EXACT.has(src)) return true;
+  if (src.includes('delivery')) return true;
+  return DELIVERY_SOURCES_FUZZY.some(platform => src.includes(platform));
+}
+
+/**
+ * The day a sale belongs to, as Square's own sales reports assign it: the day
+ * the payment was taken (earliest tender), NOT the day the order was closed.
+ * Delivery platforms leave orders OPEN for days before bulk-closing them, so
+ * closed_at lags the sale by up to several days. Return orders carry no
+ * tenders and fall back to closed_at — the day the return was processed —
+ * which is also how the Dashboard books returns.
+ */
+export function getOrderSaleDate(order) {
+  let earliest = null;
+  if (order.tenders) {
+    for (const t of order.tenders) {
+      if (t.created_at && (!earliest || t.created_at < earliest)) earliest = t.created_at;
     }
   }
-  if (order.source && order.source.name) {
-    const src = order.source.name.toLowerCase();
-    if (src.includes('delivery')) return true;
-    for (const platform of DELIVERY_SOURCES) {
-      if (src.includes(platform)) return true;
-    }
-  }
-  return false;
+  return getLocalDate(earliest || order.closed_at || order.created_at);
 }
 
 // ============================================================
@@ -151,10 +181,12 @@ export async function fetchAllOrders(locationId, startAt, endAt) {
     const body = {
       location_ids: [locationId],
       query: {
-        // COMPLETED orders windowed by closed_at (close time = payment
-        // completion for POS sales, payment date for Square Invoices).
-        // This matches how Square's own sales reports assign sales to days,
-        // and it excludes OPEN register tickets that were never paid.
+        // COMPLETED orders windowed by closed_at. Two roles for the calculator:
+        // return orders (which close the day the return is processed), and a
+        // local cache of already-closed sale orders so only the still-open
+        // paid ones need a batch retrieve. Sale orders are ultimately selected
+        // via the week's payments and bucketed by payment day — see
+        // calculator.js — so this window no longer defines what counts.
         // Square requires sort_field to match the date_time_filter field.
         filter: {
           state_filter: { states: ['COMPLETED'] },
@@ -191,4 +223,32 @@ export async function fetchAllOrders(locationId, startAt, endAt) {
     }
   } while (cursor);
   return allOrders;
+}
+
+/**
+ * Retrieve specific orders by id (the paid-but-not-yet-closed ones the
+ * closed_at search can't see). Unlike the windowed fetchers this THROWS on
+ * failure: a partial result here would silently drop real sales, and the
+ * calculator's phase-1/phase-2 design makes an abort safe.
+ */
+export async function batchRetrieveOrders(orderIds) {
+  const orders = [];
+  for (let i = 0; i < orderIds.length; i += 100) {
+    const chunk = orderIds.slice(i, i + 100);
+    const res = await fetch(`${squareBaseUrl}/v2/orders/batch-retrieve`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Square-Version': '2025-01-23',
+      },
+      body: JSON.stringify({ order_ids: chunk }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`Square batch-retrieve error: ${JSON.stringify(data.errors)}`);
+    }
+    if (data.orders) orders.push(...data.orders);
+  }
+  return orders;
 }

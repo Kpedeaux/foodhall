@@ -12,8 +12,9 @@
 
 import { sql, auditLog } from '../db/database.js';
 import {
-  fetchAllPayments, fetchAllOrders, getWeekDates, getDayName,
-  getLocalDate, toDollarsRaw, isDeliveryOrder, getCentralOffset
+  fetchAllPayments, fetchAllOrders, batchRetrieveOrders, getWeekDates,
+  getDayName, getLocalDate, getOrderSaleDate, toDollarsRaw, isDeliveryOrder,
+  getCentralOffset, addDays
 } from './square.js';
 
 const round2 = (v) => Math.round(v * 100) / 100;
@@ -47,7 +48,10 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
 
   const offset = getCentralOffset(weekStartStr);
   const beginTime = weekStartStr + 'T00:00:00' + offset;
-  const endTime = weekEnd + 'T23:59:59' + getCentralOffset(weekEnd);
+  // End bound is the (exclusive) start of the day AFTER the week, so the last
+  // second of Sunday is included; offset computed for that day (DST-safe).
+  const dayAfterEnd = addDays(weekEnd, 1);
+  const endTime = dayAfterEnd + 'T00:00:00' + getCentralOffset(dayAfterEnd);
 
   // Get vendors active during this week, joined with the plan terms effective
   // for the week. A vendor must:
@@ -108,12 +112,46 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
   const prepared = await parallelMap(vendors, VENDOR_CONCURRENCY, async (vendor) => {
     console.log(`  Fetching data for ${vendor.name}...`);
 
-    const [payments, orders] = await Promise.all([
+    const [payments, closedOrders] = await Promise.all([
       fetchAllPayments(vendor.square_location_id, beginTime, endTime),
       fetchAllOrders(vendor.square_location_id, beginTime, endTime),
     ]);
 
-    console.log(`    → ${vendor.name}: ${payments.length} payments, ${orders.length} orders`);
+    // ---- Assemble the week's sale orders from its PAYMENTS ----
+    // The week's sales are the orders behind the week's COMPLETED payments —
+    // not "orders closed this week". Most paid orders are already in the
+    // closed_at window; only the paid-but-still-open ones (delivery platform
+    // orders awaiting bulk-close, payment-link orders that never close) need
+    // an extra retrieve.
+    const ordersById = new Map();
+    for (const o of closedOrders) ordersById.set(o.id, o);
+
+    const paidOrderIds = new Set();
+    for (const p of payments) {
+      if (p.status === 'COMPLETED' && p.order_id) paidOrderIds.add(p.order_id);
+    }
+
+    const missingIds = [...paidOrderIds].filter(id => !ordersById.has(id));
+    if (missingIds.length > 0) {
+      const fetched = await batchRetrieveOrders(missingIds);
+      for (const o of fetched) ordersById.set(o.id, o);
+    }
+
+    const saleOrders = [];
+    for (const id of paidOrderIds) {
+      const o = ordersById.get(id);
+      if (o) saleOrders.push(o);
+    }
+    // Return orders carry no tenders (the money moves as a refund on the
+    // original payment), so the payments pass above can't find them. They
+    // count negative on the day the return was processed (= closed day).
+    for (const o of closedOrders) {
+      if (o.returns && o.returns.length > 0 && !(o.tenders && o.tenders.length > 0)) {
+        saleOrders.push(o);
+      }
+    }
+
+    console.log(`    → ${vendor.name}: ${payments.length} payments, ${saleOrders.length} sale/return orders (${missingIds.length} open retrieved)`);
 
     // Initialize day buckets
     const dayData = {};
@@ -138,17 +176,22 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
     // STEP 1: ORDERS — sales, delivery detection, tips
     // net_amounts already accounts for returns/refunds/discounts
     //
-    // Orders are COMPLETED-only and bucketed by closed_at (close time =
-    // payment completion), matching how Square's sales reports assign
-    // sales to days. Bucketing by created_at instead caused two audited
-    // discrepancies vs Square: never-paid OPEN register tickets counted
-    // as sales, and invoices credited to their creation date rather than
-    // the date the customer paid.
+    // Sale orders are booked on the day their payment was taken
+    // (getOrderSaleDate), exactly how the Square Dashboard books sales.
+    // Order state may be OPEN: delivery platforms leave paid orders open
+    // for days before bulk-closing them, so requiring COMPLETED (and
+    // bucketing by closed_at) booked delivery sales days late, missed the
+    // ones still open at pull time, and pulled the prior week's late-closed
+    // orders into this week. Never-paid register tickets stay excluded (no
+    // completed payment), as do voided tenders (payment not COMPLETED) and
+    // invoices not yet paid (payment date = the day the customer pays).
+    // Verified to the penny against the office's four "(Transfer)" custom
+    // reports + Sales Summary for 2026-08-24..30 (144/144 values).
     // -------------------------------------------------------
-    for (const order of orders) {
-      // fetchAllOrders already filters to COMPLETED; guard kept so a fetch
-      // change can never silently reintroduce OPEN/CANCELED orders here.
-      if (order.state !== 'COMPLETED') continue;
+    for (const order of saleOrders) {
+      // Paid orders may be OPEN or COMPLETED; a canceled/draft order that
+      // somehow carries a completed payment is left out on purpose.
+      if (order.state === 'CANCELED' || order.state === 'DRAFT') continue;
 
       // Handle return orders: skip CUSTOM_AMOUNT refunds — Square Dashboard
       // does NOT subtract these from Net Sales. ITEM returns ARE subtracted.
@@ -160,7 +203,9 @@ export async function calculateTransfersForWeek(marketId, weekStartStr, isLinenW
         if (isCustomAmountRefund) continue;
       }
 
-      const localDate = getLocalDate(order.closed_at || order.created_at);
+      // Outside this week = a prior week's sale whose order closed late; it
+      // belongs to (and is picked up by) that week's calculation, not here.
+      const localDate = getOrderSaleDate(order);
       if (!dayData[localDate]) continue;
 
       const day = dayData[localDate];
